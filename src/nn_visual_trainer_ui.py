@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-"""
-Interactive MNIST training/explanation UI.
+"""Interactive MNIST explanation UI with staged 'thinking' animation.
 
-This tool is meant for learning:
-- pick a known MNIST sample or draw a custom digit
-- run the model
-- inspect intermediate activations and final probabilities
-- inspect simple neuron contribution summaries
+The UI keeps the same core features:
+- dataset sample inference
+- drawn digit inference with preprocessing
+- neuron-style stage visualization
+- contributor text panel
+
+Additionally, the visualizer simulates reasoning by animating the strongest
+decision path (black line) layer-by-layer while keeping the full network
+diagram visible for context.
 """
 
 import random
@@ -22,29 +25,60 @@ from tensorflow import keras
 from basic_nn import MODEL_PATH, build_model, load_data
 
 
+# ------------------------------
+# Configuration
+# ------------------------------
 DRAW_GRID_SIZE = 28
 DRAW_CANVAS_SIZE = 280
+
+WINDOW_SIZE = "1500x980"
+WINDOW_MIN_SIZE = (1300, 860)
 
 COLOR_BG = "#f3f7fb"
 COLOR_CARD = "#ffffff"
 COLOR_INK = "#0f172a"
 COLOR_SUB = "#475569"
 COLOR_EDGE = "#cbd5e1"
-COLOR_ACCENT = "#0f766e"
-COLOR_ACCENT_LIGHT = "#e6fffb"
-COLOR_WARNING = "#b45309"
+
 COLOR_STATUS_INFO_BG = "#e0f2fe"
 COLOR_STATUS_INFO_FG = "#0c4a6e"
 COLOR_STATUS_WARN_BG = "#fff7ed"
 COLOR_STATUS_WARN_FG = "#9a3412"
 
+COLOR_NEUTRAL_BTN = "#e5e7eb"
+COLOR_NEUTRAL_BTN_HOVER = "#d1d5db"
+COLOR_NEUTRAL_BTN_PRESS = "#c7ccd4"
 
+DRAW_BRUSH = [
+    (-1, -1, 0.30),
+    (-1, 0, 0.55),
+    (-1, 1, 0.30),
+    (0, -1, 0.55),
+    (0, 0, 1.00),
+    (0, 1, 0.55),
+    (1, -1, 0.30),
+    (1, 0, 0.55),
+    (1, 1, 0.30),
+]
+
+THINK_STEP_MS = 320
+THINK_STAGE_LABELS = [
+    "Reading the input pixels",
+    "Activating hidden layer 1",
+    "Applying dropout path (inference mode)",
+    "Activating hidden layer 2",
+    "Computing output probabilities",
+]
+
+
+# ------------------------------
+# Model bootstrap
+# ------------------------------
 def load_or_train_model(model_path: Path) -> keras.Model:
-    # Reuse an existing trained model when available.
+    """Load saved model or train a quick bootstrap model if missing."""
     if model_path.exists():
         return keras.models.load_model(model_path)
 
-    # Fallback: train quickly so the UI can run end-to-end.
     x_train, y_train, x_test, y_test = load_data()
     model = build_model()
     model.fit(
@@ -69,12 +103,13 @@ def load_or_train_model(model_path: Path) -> keras.Model:
 
 
 class NNTrainingToolUI:
+    """Main application class for model visualization and interaction."""
+
     def __init__(self, root: tk.Tk) -> None:
-        # Main window and status labels.
         self.root = root
         self.root.title("MNIST Neural Network Decision Explorer")
-        self.root.geometry("1500x980")
-        self.root.minsize(1300, 860)
+        self.root.geometry(WINDOW_SIZE)
+        self.root.minsize(*WINDOW_MIN_SIZE)
         self.root.configure(bg=COLOR_BG)
 
         self.status_var = tk.StringVar(value="Loading data and model...")
@@ -83,23 +118,24 @@ class NNTrainingToolUI:
 
         self.draw_buffer = np.zeros((DRAW_GRID_SIZE, DRAW_GRID_SIZE), dtype=np.float32)
 
+        self._thinking_job: str | None = None
+        self._thinking_context: dict[str, object] | None = None
+
         self._configure_styles()
         self._build_layout()
-        self._bind_accessibility_shortcuts()
+        self._bind_shortcuts()
 
-        # Load dataset + model once at startup.
         self.x_train, self.y_train, self.x_test, self.y_test = load_data()
         self.model = load_or_train_model(MODEL_PATH)
-        self._ensure_model_is_callable()
+        self._ensure_model_callable()
 
-        # Probe model exposes outputs from each stage for visualization.
         self.probe_model = keras.Model(
             inputs=self.model.inputs,
             outputs=[
-                self.model.layers[0].output,  # Dense(128)
-                self.model.layers[1].output,  # Dropout(0.2)
-                self.model.layers[2].output,  # Dense(64)
-                self.model.layers[3].output,  # Dense(10, softmax)
+                self.model.layers[0].output,
+                self.model.layers[1].output,
+                self.model.layers[2].output,
+                self.model.layers[3].output,
             ],
         )
 
@@ -114,14 +150,16 @@ class NNTrainingToolUI:
             level="info",
         )
         self.update_view_from_dataset()
-        self._redraw_draw_canvas()
+        self._draw_digit_canvas()
 
+    # ------------------------------
+    # Style / setup
+    # ------------------------------
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
         style.theme_use("clam")
 
         style.configure("App.TFrame", background=COLOR_BG)
-        style.configure("Card.TFrame", background=COLOR_CARD)
 
         style.configure(
             "Title.TLabel",
@@ -147,12 +185,6 @@ class NNTrainingToolUI:
             foreground=COLOR_SUB,
             font=("Avenir Next", 10),
         )
-        style.configure(
-            "Status.TLabel",
-            background=COLOR_BG,
-            foreground=COLOR_SUB,
-            font=("Avenir Next", 10),
-        )
 
         style.configure(
             "Card.TLabelframe",
@@ -169,35 +201,8 @@ class NNTrainingToolUI:
         )
 
         style.configure(
-            "Accent.TButton",
-            background="#d1d5db",
-            foreground="#111827",
-            borderwidth=0,
-            focusthickness=0,
-            font=("Avenir Next", 10, "bold"),
-            padding=(12, 8),
-        )
-        style.map(
-            "Accent.TButton",
-            background=[("active", "#c4c9d1"), ("pressed", "#b9bec6")],
-            foreground=[("disabled", "#9ca3af"), ("!disabled", "#111827")],
-        )
-        style.configure(
-            "Subtle.TButton",
-            background=COLOR_ACCENT_LIGHT,
-            foreground=COLOR_ACCENT,
-            borderwidth=1,
-            font=("Avenir Next", 10, "bold"),
-            padding=(12, 8),
-        )
-        style.map(
-            "Subtle.TButton",
-            background=[("active", "#ccfbf1"), ("pressed", "#b8f7ea")],
-            foreground=[("!disabled", "#115e59")],
-        )
-        style.configure(
             "Neutral.TButton",
-            background="#e5e7eb",
+            background=COLOR_NEUTRAL_BTN,
             foreground="#1f2937",
             borderwidth=1,
             font=("Avenir Next", 10, "bold"),
@@ -205,50 +210,8 @@ class NNTrainingToolUI:
         )
         style.map(
             "Neutral.TButton",
-            background=[("active", "#d1d5db"), ("pressed", "#c7ccd4")],
-            foreground=[("!disabled", "#111827")],
-        )
-        style.configure(
-            "DrawPrimary.TButton",
-            background="#d1d5db",
-            foreground="#111827",
-            borderwidth=0,
-            font=("Avenir Next", 14, "bold"),
-            padding=(20, 16),
-        )
-        style.map(
-            "DrawPrimary.TButton",
-            background=[("active", "#c4c9d1"), ("pressed", "#b9bec6")],
-            foreground=[("!disabled", "#111827")],
-        )
-        style.configure(
-            "DrawSecondary.TButton",
-            background="#ecfeff",
-            foreground="#0f766e",
-            borderwidth=1,
-            font=("Avenir Next", 14, "bold"),
-            padding=(20, 16),
-        )
-        style.map(
-            "DrawSecondary.TButton",
-            background=[("active", "#cffafe"), ("pressed", "#bae6fd")],
-            foreground=[("!disabled", "#115e59")],
-        )
-        style.map(
-            "Accent.TButton",
-            bordercolor=[("focus", "#134e4a")],
-        )
-        style.map(
-            "Subtle.TButton",
-            bordercolor=[("focus", "#0f766e")],
-        )
-        style.map(
-            "DrawPrimary.TButton",
-            bordercolor=[("focus", "#134e4a")],
-        )
-        style.map(
-            "DrawSecondary.TButton",
-            bordercolor=[("focus", "#0f766e")],
+            background=[("active", COLOR_NEUTRAL_BTN_HOVER), ("pressed", COLOR_NEUTRAL_BTN_PRESS)],
+            foreground=[("disabled", "#9ca3af"), ("!disabled", "#111827")],
         )
 
         style.configure(
@@ -258,49 +221,48 @@ class NNTrainingToolUI:
             padding=4,
         )
 
-    def _ensure_model_is_callable(self) -> None:
-        # Keras 3 may load a Sequential model without creating symbolic input
-        # tensors until the model is called at least once.
+    def _bind_shortcuts(self) -> None:
+        self.root.bind("<Return>", lambda _e: self.update_view_from_dataset())
+        self.root.bind("<KP_Enter>", lambda _e: self.update_view_from_dataset())
+        self.root.bind("r", lambda _e: self.pick_random_sample())
+        self.root.bind("R", lambda _e: self.pick_random_sample())
+        self.root.bind("d", lambda _e: self.update_view_from_drawn())
+        self.root.bind("D", lambda _e: self.update_view_from_drawn())
+        self.root.bind("c", lambda _e: self.clear_drawing())
+        self.root.bind("C", lambda _e: self.clear_drawing())
+        self.root.bind("<Escape>", lambda _e: self.clear_drawing())
+
+    def _ensure_model_callable(self) -> None:
         if not self.model.built:
             self.model.build((None, 784))
         _ = self.model(np.zeros((1, 784), dtype=np.float32), training=False)
 
-    def _bind_accessibility_shortcuts(self) -> None:
-        # Keyboard alternatives for common actions improve non-mouse usability.
-        self.root.bind("<Return>", lambda _event: self.update_view_from_dataset())
-        self.root.bind("<KP_Enter>", lambda _event: self.update_view_from_dataset())
-        self.root.bind("r", lambda _event: self.pick_random_sample())
-        self.root.bind("R", lambda _event: self.pick_random_sample())
-        self.root.bind("d", lambda _event: self.update_view_from_drawn())
-        self.root.bind("D", lambda _event: self.update_view_from_drawn())
+    def _cache_layer_weights(self) -> None:
+        self.w_dense1, self.b_dense1 = self.model.layers[0].get_weights()
+        self.w_dense2, self.b_dense2 = self.model.layers[2].get_weights()
+        self.w_out, self.b_out = self.model.layers[3].get_weights()
 
     def _set_status(self, message: str, level: str = "info") -> None:
         self.status_var.set(message)
         if level == "warn":
-            self.status_label.configure(
-                bg=COLOR_STATUS_WARN_BG,
-                fg=COLOR_STATUS_WARN_FG,
-            )
+            self.status_label.configure(bg=COLOR_STATUS_WARN_BG, fg=COLOR_STATUS_WARN_FG)
         else:
-            self.status_label.configure(
-                bg=COLOR_STATUS_INFO_BG,
-                fg=COLOR_STATUS_INFO_FG,
-            )
+            self.status_label.configure(bg=COLOR_STATUS_INFO_BG, fg=COLOR_STATUS_INFO_FG)
 
-    def _cache_layer_weights(self) -> None:
-        # Dense1: input(784) -> hidden1(128)
-        self.w_dense1, self.b_dense1 = self.model.layers[0].get_weights()
-        # Dense2: hidden1(128) -> hidden2(64)
-        self.w_dense2, self.b_dense2 = self.model.layers[2].get_weights()
-        # Output: hidden2(64) -> classes(10)
-        self.w_out, self.b_out = self.model.layers[3].get_weights()
-
+    # ------------------------------
+    # Layout
+    # ------------------------------
     def _build_layout(self) -> None:
-        # Top-level layout: header, controls, left input panel, right analysis panel.
         outer = ttk.Frame(self.root, padding=14, style="App.TFrame")
         outer.pack(fill="both", expand=True)
 
-        header = ttk.Frame(outer, style="App.TFrame")
+        self._build_header(outer)
+        self._build_controls(outer)
+        self._build_main_area(outer)
+        self._build_status(outer)
+
+    def _build_header(self, parent: ttk.Frame) -> None:
+        header = ttk.Frame(parent, style="App.TFrame")
         header.pack(fill="x", pady=(0, 10))
 
         ttk.Label(
@@ -311,14 +273,18 @@ class NNTrainingToolUI:
         ttk.Label(
             header,
             text=(
-                "Training tool: inspect stage-by-stage activations, then review "
-                "which neurons contributed most to the final decision."
+                "Inspect stage-by-stage activations and contributor summaries for "
+                "dataset samples or your own drawn digits."
             ),
             style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(2, 0))
 
+    def _build_controls(self, parent: ttk.Frame) -> None:
         controls = ttk.LabelFrame(
-            outer, text="Dataset Input Controls", padding=12, style="Card.TLabelframe"
+            parent,
+            text="Dataset Input Controls",
+            padding=12,
+            style="Card.TLabelframe",
         )
         controls.pack(fill="x", pady=(0, 10))
         controls.grid_columnconfigure(6, weight=1)
@@ -326,7 +292,11 @@ class NNTrainingToolUI:
         self.index_var = tk.IntVar(value=0)
 
         ttk.Label(controls, text="MNIST test sample index:", style="Section.TLabel").grid(
-            row=0, column=0, padx=(0, 6), pady=4, sticky="w"
+            row=0,
+            column=0,
+            padx=(0, 6),
+            pady=4,
+            sticky="w",
         )
         self.index_spin = ttk.Spinbox(
             controls,
@@ -342,7 +312,7 @@ class NNTrainingToolUI:
             controls,
             text="Run Dataset Sample",
             command=self.update_view_from_dataset,
-            style="Accent.TButton",
+            style="Neutral.TButton",
         ).grid(row=0, column=2, padx=(0, 8), pady=4, sticky="w")
 
         ttk.Button(
@@ -356,8 +326,9 @@ class NNTrainingToolUI:
             controls,
             text="Run Drawn Digit",
             command=self.update_view_from_drawn,
-            style="Accent.TButton",
+            style="Neutral.TButton",
         ).grid(row=0, column=4, padx=(0, 8), pady=4, sticky="w")
+
         ttk.Button(
             controls,
             text="Clear Drawn Digit",
@@ -368,26 +339,28 @@ class NNTrainingToolUI:
         ttk.Label(
             controls,
             text=(
-                "Tip: use low-confidence outputs and compare contributor lists to "
-                "teach how decision boundaries behave. Shortcuts: Enter=run sample, "
-                "R=random sample, D=run drawn, C/Esc=clear drawing."
+                "Shortcuts: Enter=run sample, R=random sample, "
+                "D=run drawn, C/Esc=clear drawing."
             ),
             style="Body.TLabel",
         ).grid(row=1, column=0, columnspan=7, pady=(6, 0), sticky="w")
 
-        results = ttk.Frame(outer, style="App.TFrame")
+    def _build_main_area(self, parent: ttk.Frame) -> None:
+        results = ttk.Frame(parent, style="App.TFrame")
         results.pack(fill="both", expand=True)
 
         left = ttk.LabelFrame(results, text="Input Sources", padding=10, style="Card.TLabelframe")
         left.pack(side="left", fill="y", padx=(0, 10))
-
         self._build_left_panel(left)
 
         right = ttk.Frame(results, style="App.TFrame")
         right.pack(side="left", fill="both", expand=True)
 
         decision_frame = ttk.LabelFrame(
-            right, text="Decision Stages", padding=10, style="Card.TLabelframe"
+            right,
+            text="Decision Stages",
+            padding=10,
+            style="Card.TLabelframe",
         )
         decision_frame.pack(fill="both", expand=True)
 
@@ -423,18 +396,16 @@ class NNTrainingToolUI:
             padx=10,
             pady=10,
         )
-        contrib_scroll = ttk.Scrollbar(
-            contrib_frame,
-            orient="vertical",
-            command=self.contrib_text.yview,
-        )
+        contrib_scroll = ttk.Scrollbar(contrib_frame, orient="vertical", command=self.contrib_text.yview)
         self.contrib_text.configure(yscrollcommand=contrib_scroll.set)
         self.contrib_text.pack(side="left", fill="both", expand=True)
         contrib_scroll.pack(side="right", fill="y")
         self.contrib_text.configure(state="disabled")
 
-        status_frame = ttk.Frame(outer, style="App.TFrame")
+    def _build_status(self, parent: ttk.Frame) -> None:
+        status_frame = ttk.Frame(parent, style="App.TFrame")
         status_frame.pack(fill="x", pady=(8, 0))
+
         self.status_label = tk.Label(
             status_frame,
             textvariable=self.status_var,
@@ -449,12 +420,11 @@ class NNTrainingToolUI:
         self.status_label.pack(fill="x", anchor="w")
 
     def _build_left_panel(self, container: ttk.LabelFrame) -> None:
-        # Left side contains:
-        # 1) current input view (what is being inferred)
-        # 2) draw canvas for user-created digits
-        # 3) model-input preview (post-preprocessing 28x28)
         sample_frame = ttk.LabelFrame(
-            container, text="Current Input (28x28)", padding=8, style="Card.TLabelframe"
+            container,
+            text="Current Input (28x28)",
+            padding=8,
+            style="Card.TLabelframe",
         )
         sample_frame.pack(fill="x")
 
@@ -468,19 +438,16 @@ class NNTrainingToolUI:
         )
         self.input_canvas.pack()
 
-        ttk.Label(
-            sample_frame,
-            textvariable=self.truth_var,
-            style="Section.TLabel",
-        ).pack(anchor="w", pady=(10, 2))
-        ttk.Label(
-            sample_frame,
-            textvariable=self.prediction_var,
-            style="Section.TLabel",
-        ).pack(anchor="w")
+        ttk.Label(sample_frame, textvariable=self.truth_var, style="Section.TLabel").pack(
+            anchor="w", pady=(10, 2)
+        )
+        ttk.Label(sample_frame, textvariable=self.prediction_var, style="Section.TLabel").pack(anchor="w")
 
         draw_frame = ttk.LabelFrame(
-            container, text="Draw Your Own Digit", padding=8, style="Card.TLabelframe"
+            container,
+            text="Draw Your Own Digit",
+            padding=8,
+            style="Card.TLabelframe",
         )
         draw_frame.pack(fill="x", pady=(10, 0))
 
@@ -495,12 +462,8 @@ class NNTrainingToolUI:
             takefocus=1,
         )
         self.draw_canvas.pack()
-
         self.draw_canvas.bind("<Button-1>", self._on_draw)
         self.draw_canvas.bind("<B1-Motion>", self._on_draw)
-        self.root.bind("<Escape>", lambda _event: self.clear_drawing())
-        self.root.bind("c", lambda _event: self.clear_drawing())
-        self.root.bind("C", lambda _event: self.clear_drawing())
 
         ttk.Label(
             draw_frame,
@@ -535,72 +498,43 @@ class NNTrainingToolUI:
             style="Body.TLabel",
         ).pack(anchor="w", pady=(8, 0))
 
+    # ------------------------------
+    # Input interactions
+    # ------------------------------
     def _on_draw(self, event: tk.Event) -> None:
-        # Convert mouse position into grid cell coordinates.
         cell_size = DRAW_CANVAS_SIZE / DRAW_GRID_SIZE
         col = int(event.x / cell_size)
         row = int(event.y / cell_size)
         self._paint_to_draw_buffer(row, col)
-        self._redraw_draw_canvas()
+        self._draw_digit_canvas()
 
     def _paint_to_draw_buffer(self, row: int, col: int) -> None:
         if row < 0 or row >= DRAW_GRID_SIZE or col < 0 or col >= DRAW_GRID_SIZE:
             return
 
-        # Paint a small soft brush to make strokes less pixelated.
-        brush = [
-            (-1, -1, 0.30),
-            (-1, 0, 0.55),
-            (-1, 1, 0.30),
-            (0, -1, 0.55),
-            (0, 0, 1.00),
-            (0, 1, 0.55),
-            (1, -1, 0.30),
-            (1, 0, 0.55),
-            (1, 1, 0.30),
-        ]
-
-        for dr, dc, strength in brush:
+        for dr, dc, strength in DRAW_BRUSH:
             rr = row + dr
             cc = col + dc
             if 0 <= rr < DRAW_GRID_SIZE and 0 <= cc < DRAW_GRID_SIZE:
                 self.draw_buffer[rr, cc] = min(1.0, self.draw_buffer[rr, cc] + strength)
 
-    def _redraw_draw_canvas(self) -> None:
-        # Render each 28x28 draw-buffer value as one scaled-up square.
-        self.draw_canvas.delete("all")
-
-        cell = DRAW_CANVAS_SIZE / DRAW_GRID_SIZE
-        for r in range(DRAW_GRID_SIZE):
-            for c in range(DRAW_GRID_SIZE):
-                value = float(self.draw_buffer[r, c])
-                gray = int(value * 255)
-                color = f"#{gray:02x}{gray:02x}{gray:02x}"
-                x0 = c * cell
-                y0 = r * cell
-                x1 = x0 + cell
-                y1 = y0 + cell
-                self.draw_canvas.create_rectangle(
-                    x0,
-                    y0,
-                    x1,
-                    y1,
-                    fill=color,
-                    outline=color,
-                )
+    def _draw_digit_canvas(self) -> None:
+        self._draw_pixel_grid(self.draw_canvas, self.draw_buffer, margin=0, size=DRAW_CANVAS_SIZE)
 
     def clear_drawing(self) -> None:
-        # Reset draw buffer and redraw an empty canvas.
+        self._cancel_thinking_animation()
         self.draw_buffer.fill(0.0)
-        self._redraw_draw_canvas()
+        self._draw_digit_canvas()
         self._set_status("Drawing cleared.", level="info")
 
     def pick_random_sample(self) -> None:
         self.index_var.set(random.randint(0, self.max_index))
         self.update_view_from_dataset()
 
+    # ------------------------------
+    # Entry points
+    # ------------------------------
     def update_view_from_dataset(self) -> None:
-        # Run inference using a selected MNIST test example.
         try:
             idx = int(self.index_var.get())
         except (ValueError, tk.TclError):
@@ -608,22 +542,14 @@ class NNTrainingToolUI:
             return
 
         if idx < 0 or idx > self.max_index:
-            self._set_status(
-                f"Index out of range. Use 0 to {self.max_index}.",
-                level="warn",
-            )
+            self._set_status(f"Index out of range. Use 0 to {self.max_index}.", level="warn")
             return
 
         x = self.x_test[idx]
         y_true = int(self.y_test[idx])
-        self._run_inference_and_render(
-            x=x,
-            y_true=y_true,
-            input_label=f"Dataset sample {idx}",
-        )
+        self._run_inference_and_render(x=x, y_true=y_true, input_label=f"Dataset sample {idx}")
 
     def update_view_from_drawn(self) -> None:
-        # Preprocess drawn input to be closer to MNIST-style digits.
         x = self._preprocess_drawn_digit(self.draw_buffer)
         if float(np.max(x)) <= 0.0:
             self._set_status("Draw a digit first, then run inference.", level="warn")
@@ -635,8 +561,10 @@ class NNTrainingToolUI:
             input_label="Drawn input (preprocessed to MNIST style)",
         )
 
+    # ------------------------------
+    # Preprocessing
+    # ------------------------------
     def _shift_image(self, image: np.ndarray, shift_r: int, shift_c: int) -> np.ndarray:
-        # Shift image without wrapping pixels (new areas become 0).
         shifted = np.zeros_like(image)
         h, w = image.shape
 
@@ -655,21 +583,11 @@ class NNTrainingToolUI:
         return shifted
 
     def _preprocess_drawn_digit(self, draw_img: np.ndarray) -> np.ndarray:
-        """
-        Convert user drawing into model-ready 784 vector.
-
-        Steps:
-        1) threshold + crop foreground
-        2) resize preserving aspect ratio (max side -> 20)
-        3) place inside 28x28 canvas
-        4) center by mass
-        5) clip to [0,1] and flatten
-        """
+        """Normalize user drawing into a model-ready 784-length vector."""
         img = draw_img.astype(np.float32).copy()
         if float(np.max(img)) <= 0.0:
             return img.reshape(-1)
 
-        # 1) Crop to foreground bounding box.
         mask = img > 0.10
         rows = np.where(mask.any(axis=1))[0]
         cols = np.where(mask.any(axis=0))[0]
@@ -679,7 +597,6 @@ class NNTrainingToolUI:
         crop = img[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
         crop /= max(float(np.max(crop)), 1e-8)
 
-        # 2) Resize while preserving aspect ratio so longest side is 20px.
         h, w = crop.shape
         scale = 20.0 / max(h, w)
         new_h = max(1, int(round(h * scale)))
@@ -690,13 +607,11 @@ class NNTrainingToolUI:
             method="bilinear",
         ).numpy()[..., 0]
 
-        # 3) Place resized digit into 28x28 frame (MNIST-like margins).
         canvas = np.zeros((28, 28), dtype=np.float32)
         top = (28 - new_h) // 2
         left = (28 - new_w) // 2
         canvas[top : top + new_h, left : left + new_w] = resized
 
-        # 4) Center by center-of-mass to reduce position mismatch.
         mass = float(np.sum(canvas))
         if mass > 1e-8:
             rr, cc = np.indices(canvas.shape)
@@ -708,15 +623,13 @@ class NNTrainingToolUI:
 
         return np.clip(canvas, 0.0, 1.0).astype(np.float32).reshape(-1)
 
-    def _run_inference_and_render(
-        self,
-        x: np.ndarray,
-        y_true: int | None,
-        input_label: str,
-    ) -> None:
-        # Gather stage activations + final probabilities in one forward pass.
+    # ------------------------------
+    # Inference + animation
+    # ------------------------------
+    def _run_inference_and_render(self, x: np.ndarray, y_true: int | None, input_label: str) -> None:
         dense1, dropout_out, dense2, probs = self.probe_model.predict(
-            np.expand_dims(x, axis=0), verbose=0
+            np.expand_dims(x, axis=0),
+            verbose=0,
         )
 
         dense1 = dense1[0]
@@ -727,249 +640,159 @@ class NNTrainingToolUI:
         y_pred = int(np.argmax(probs))
         confidence = float(probs[y_pred])
 
-        if y_true is None:
-            self.truth_var.set("Ground Truth: N/A (drawn input)")
-        else:
-            self.truth_var.set(f"Ground Truth: {y_true}")
-
-        self.prediction_var.set(
-            f"Prediction: {y_pred}  (confidence {confidence * 100:.2f}%)"
+        self.truth_var.set(
+            "Ground Truth: N/A (drawn input)" if y_true is None else f"Ground Truth: {y_true}"
         )
-        self._set_status(
-            f"{input_label} processed. Review activation stages and contributor lists.",
-            level="info",
-        )
+        self.prediction_var.set(f"Prediction: {y_pred}  (confidence {confidence * 100:.2f}%)")
 
-        self._draw_input_image(x.reshape(28, 28))
-        self._draw_model_input_preview(x.reshape(28, 28))
-        self._draw_decision_stages(x, dense1, dropout_out, dense2, probs, y_true, y_pred)
-        self._render_contributor_text(x, dense1, dropout_out, dense2, probs, y_pred)
+        image_2d = x.reshape(28, 28)
+        self._draw_input_image(image_2d)
+        self._draw_model_input_preview(image_2d)
 
-    def _draw_input_image(self, image_2d: np.ndarray) -> None:
-        # Render the 28x28 input shown as the current inference source.
-        self.input_canvas.delete("all")
-
-        margin = 12
-        size = 336
-        cell = size / 28
-
-        self.input_canvas.create_rectangle(
-            margin - 1,
-            margin - 1,
-            margin + size + 1,
-            margin + size + 1,
-            outline="#334155",
-            width=2,
+        self._start_thinking_animation(
+            x=x,
+            dense1=dense1,
+            dropout_out=dropout_out,
+            dense2=dense2,
+            probs=probs,
+            y_true=y_true,
+            y_pred=y_pred,
+            confidence=confidence,
+            input_label=input_label,
         )
 
-        for r in range(28):
-            for c in range(28):
-                value = float(image_2d[r, c])
-                gray = int(value * 255)
-                color = f"#{gray:02x}{gray:02x}{gray:02x}"
-                x0 = margin + c * cell
-                y0 = margin + r * cell
-                x1 = x0 + cell
-                y1 = y0 + cell
-                self.input_canvas.create_rectangle(
-                    x0,
-                    y0,
-                    x1,
-                    y1,
-                    fill=color,
-                    outline=color,
-                )
+    def _cancel_thinking_animation(self) -> None:
+        if self._thinking_job is not None:
+            self.root.after_cancel(self._thinking_job)
+            self._thinking_job = None
+        self._thinking_context = None
 
-    def _draw_model_input_preview(self, image_2d: np.ndarray) -> None:
-        # Render what the model actually receives (especially useful for drawn input).
-        self.model_input_canvas.delete("all")
+    def _set_contributor_text(self, text: str) -> None:
+        self.contrib_text.configure(state="normal")
+        self.contrib_text.delete("1.0", "end")
+        self.contrib_text.insert("1.0", text)
+        self.contrib_text.configure(state="disabled")
 
-        margin = 8
-        size = 180
-        cell = size / 28
-
-        self.model_input_canvas.create_rectangle(
-            margin - 1,
-            margin - 1,
-            margin + size + 1,
-            margin + size + 1,
-            outline="#334155",
-            width=2,
-        )
-
-        for r in range(28):
-            for c in range(28):
-                value = float(image_2d[r, c])
-                gray = int(value * 255)
-                color = f"#{gray:02x}{gray:02x}{gray:02x}"
-                x0 = margin + c * cell
-                y0 = margin + r * cell
-                x1 = x0 + cell
-                y1 = y0 + cell
-                self.model_input_canvas.create_rectangle(
-                    x0,
-                    y0,
-                    x1,
-                    y1,
-                    fill=color,
-                    outline=color,
-                )
-
-    def _draw_activation_strip(
+    def _start_thinking_animation(
         self,
-        x: int,
-        y: int,
-        width: int,
-        height: int,
-        activations: np.ndarray,
-        title: str,
-        color: str,
-    ) -> None:
-        # Legacy-style compact activation strip (kept as helper).
-        canvas = self.stages_canvas
-        canvas.create_rectangle(
-            x,
-            y,
-            x + width,
-            y + height,
-            fill="#ffffff",
-            outline="#cbd5e1",
-            width=1,
-        )
-
-        canvas.create_text(
-            x + 12,
-            y + 18,
-            text=title,
-            anchor="w",
-            font=("Helvetica", 12, "bold"),
-            fill="#0f172a",
-        )
-
-        n = len(activations)
-        plot_x = x + 12
-        plot_y = y + 36
-        plot_w = width - 24
-        plot_h = height - 70
-
-        max_val = max(float(np.max(activations)), 1e-8)
-        bar_w = plot_w / n
-
-        for i, val in enumerate(activations):
-            norm = float(val) / max_val
-            x0 = plot_x + i * bar_w
-            y1 = plot_y + plot_h
-            y0 = y1 - (norm * plot_h)
-            canvas.create_line(x0, y1, x0, y0, fill=color, width=1)
-
-        top_k = np.argsort(activations)[-5:][::-1]
-        top_text = ", ".join(
-            [f"n{int(i)}={float(activations[i]):.3f}" for i in top_k]
-        )
-        canvas.create_text(
-            x + 12,
-            y + height - 18,
-            text=f"Top activations: {top_text}",
-            anchor="w",
-            font=("Helvetica", 10),
-            fill="#334155",
-        )
-
-    def _draw_output_probabilities(
-        self,
-        x: int,
-        y: int,
-        width: int,
-        height: int,
+        x: np.ndarray,
+        dense1: np.ndarray,
+        dropout_out: np.ndarray,
+        dense2: np.ndarray,
         probs: np.ndarray,
         y_true: int | None,
         y_pred: int,
+        confidence: float,
+        input_label: str,
     ) -> None:
-        # Draw softmax outputs as horizontal bars.
-        canvas = self.stages_canvas
+        self._cancel_thinking_animation()
+
+        self._thinking_context = {
+            "x": x,
+            "dense1": dense1,
+            "dropout_out": dropout_out,
+            "dense2": dense2,
+            "probs": probs,
+            "y_true": y_true,
+            "y_pred": y_pred,
+            "confidence": confidence,
+            "input_label": input_label,
+        }
+
+        self._set_contributor_text("Thinking... contribution details appear after final output.")
+        self._advance_thinking_stage(0)
+
+    def _advance_thinking_stage(self, stage_idx: int) -> None:
+        ctx = self._thinking_context
+        if ctx is None:
+            return
+
+        final_stage = len(THINK_STAGE_LABELS) - 1
+        stage = min(stage_idx, final_stage)
+
+        self._draw_decision_stages(
+            ctx["x"],  # type: ignore[arg-type]
+            ctx["dense1"],  # type: ignore[arg-type]
+            ctx["dropout_out"],  # type: ignore[arg-type]
+            ctx["dense2"],  # type: ignore[arg-type]
+            ctx["probs"],  # type: ignore[arg-type]
+            ctx["y_true"],  # type: ignore[arg-type]
+            ctx["y_pred"],  # type: ignore[arg-type]
+            thinking_stage=stage,
+        )
+
+        self._set_status(
+            f"Thinking {stage + 1}/{final_stage + 1}: {THINK_STAGE_LABELS[stage]}",
+            level="info",
+        )
+
+        if stage < final_stage:
+            self._thinking_job = self.root.after(
+                THINK_STEP_MS,
+                lambda: self._advance_thinking_stage(stage + 1),
+            )
+            return
+
+        # Final stage reached.
+        y_pred = int(ctx["y_pred"])
+        confidence = float(ctx["confidence"])
+        input_label = str(ctx["input_label"])
+        self._set_status(
+            f"{input_label} processed. Final decision: {y_pred} "
+            f"(confidence {confidence * 100:.2f}%).",
+            level="info",
+        )
+
+        self._render_contributor_text(
+            ctx["x"],  # type: ignore[arg-type]
+            ctx["dense1"],  # type: ignore[arg-type]
+            ctx["dropout_out"],  # type: ignore[arg-type]
+            ctx["dense2"],  # type: ignore[arg-type]
+            ctx["probs"],  # type: ignore[arg-type]
+            y_pred,
+        )
+        self._thinking_job = None
+
+    # ------------------------------
+    # Small rendering helpers
+    # ------------------------------
+    def _draw_pixel_grid(
+        self,
+        canvas: tk.Canvas,
+        image_2d: np.ndarray,
+        margin: int,
+        size: int,
+    ) -> None:
+        canvas.delete("all")
+        cell = size / 28
+
         canvas.create_rectangle(
-            x,
-            y,
-            x + width,
-            y + height,
-            fill="#ffffff",
-            outline="#cbd5e1",
-            width=1,
+            margin - 1,
+            margin - 1,
+            margin + size + 1,
+            margin + size + 1,
+            outline="#334155",
+            width=2,
         )
 
-        canvas.create_text(
-            x + 12,
-            y + 18,
-            text="Output Layer (Softmax) - Class Probabilities",
-            anchor="w",
-            font=("Helvetica", 12, "bold"),
-            fill="#0f172a",
-        )
+        for r in range(28):
+            for c in range(28):
+                value = float(image_2d[r, c])
+                gray = int(np.clip(value, 0.0, 1.0) * 255)
+                color = f"#{gray:02x}{gray:02x}{gray:02x}"
+                x0 = margin + c * cell
+                y0 = margin + r * cell
+                x1 = x0 + cell
+                y1 = y0 + cell
+                canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline=color)
 
-        bar_area_x = x + 16
-        bar_area_y = y + 42
-        bar_area_w = width - 32
-        gap = 4
-        available_h = height - 52
-        bar_h = max(8, int((available_h - (9 * gap)) / 10))
+    def _draw_input_image(self, image_2d: np.ndarray) -> None:
+        self._draw_pixel_grid(self.input_canvas, image_2d, margin=12, size=336)
 
-        for digit in range(10):
-            p = float(probs[digit])
-            y0 = bar_area_y + digit * (bar_h + gap)
-            y1 = y0 + bar_h
-
-            canvas.create_rectangle(
-                bar_area_x,
-                y0,
-                bar_area_x + bar_area_w,
-                y1,
-                fill="#f1f5f9",
-                outline="#e2e8f0",
-            )
-
-            fill_w = bar_area_w * p
-            if digit == y_pred:
-                fill = "#16a34a"
-            elif y_true is not None and digit == y_true:
-                fill = "#2563eb"
-            else:
-                fill = "#64748b"
-
-            canvas.create_rectangle(
-                bar_area_x,
-                y0,
-                bar_area_x + fill_w,
-                y1,
-                fill=fill,
-                outline=fill,
-            )
-
-            label = f"Digit {digit}"
-            marker = ""
-            if y_true is not None and digit == y_true:
-                marker += " (true)"
-            if digit == y_pred:
-                marker += " (pred)"
-
-            canvas.create_text(
-                bar_area_x + 6,
-                y0 + bar_h / 2,
-                text=label + marker,
-                anchor="w",
-                font=("Helvetica", 10),
-                fill="#0f172a",
-            )
-            canvas.create_text(
-                bar_area_x + bar_area_w - 6,
-                y0 + bar_h / 2,
-                text=f"{p * 100:.2f}%",
-                anchor="e",
-                font=("Helvetica", 10),
-                fill="#0f172a",
-            )
+    def _draw_model_input_preview(self, image_2d: np.ndarray) -> None:
+        self._draw_pixel_grid(self.model_input_canvas, image_2d, margin=8, size=180)
 
     def _pick_indices(self, n: int, k: int) -> np.ndarray:
-        # Evenly sample indices for readable neuron rendering.
         if k >= n:
             return np.arange(n, dtype=np.int32)
         if k <= 1:
@@ -977,25 +800,24 @@ class NNTrainingToolUI:
         return np.unique(np.linspace(0, n - 1, num=k, dtype=np.int32))
 
     def _mix_with_white(self, hex_color: str, intensity: float) -> str:
-        # Blend base color toward white based on activation intensity.
         intensity = float(np.clip(intensity, 0.0, 1.0))
         hex_color = hex_color.lstrip("#")
         r = int(hex_color[0:2], 16)
         g = int(hex_color[2:4], 16)
         b = int(hex_color[4:6], 16)
-
-        # intensity=0 -> near white, intensity=1 -> base color
         rr = int((255 * (1.0 - intensity)) + (r * intensity))
         gg = int((255 * (1.0 - intensity)) + (g * intensity))
         bb = int((255 * (1.0 - intensity)) + (b * intensity))
         return f"#{rr:02x}{gg:02x}{bb:02x}"
 
     def _layer_y_positions(self, top: float, bottom: float, count: int) -> np.ndarray:
-        # Evenly spread neuron markers vertically.
         if count <= 1:
             return np.array([(top + bottom) / 2.0], dtype=np.float32)
         return np.linspace(top, bottom, num=count, dtype=np.float32)
 
+    # ------------------------------
+    # Decision stage visualizer
+    # ------------------------------
     def _draw_decision_stages(
         self,
         x_input: np.ndarray,
@@ -1005,24 +827,16 @@ class NNTrainingToolUI:
         probs: np.ndarray,
         y_true: int | None,
         y_pred: int,
+        thinking_stage: int = 4,
     ) -> None:
-        """
-        Main network-style visualization panel.
-
-        This intentionally mirrors the static neuron-level SVG look:
-        - vertical layer columns
-        - representative inter-layer edges
-        - activation-based neuron color intensity
-        - highlighted strongest activation path
-        - probability bars for class output
-        """
+        """Draw full network view, with staged black-path thinking animation."""
         canvas = self.stages_canvas
         canvas.delete("all")
         canvas.update_idletasks()
+
         width = max(canvas.winfo_width(), 1000)
         height = max(canvas.winfo_height(), 540)
 
-        # Background and headings (style aligned to neuron-level SVG).
         canvas.create_rectangle(0, 0, width, height, fill="#f8fafc", outline="")
         canvas.create_rectangle(0, 0, width, 52, fill="#eef2ff", outline="")
         canvas.create_text(
@@ -1056,12 +870,14 @@ class NNTrainingToolUI:
             ("Output", 10, 10, probs, "#dc2626"),
         ]
 
+        thinking_stage = max(0, min(thinking_stage, len(layer_defs) - 1))
+        thinking_segments = min(thinking_stage, len(layer_defs) - 1)
+
         sampled_indices: list[np.ndarray] = []
         sampled_values: list[np.ndarray] = []
         y_positions: list[np.ndarray] = []
 
         for i, (_name, total_n, shown_n, values, _color) in enumerate(layer_defs):
-            # Render a sampled subset per layer to keep the UI readable.
             idx = self._pick_indices(total_n, shown_n)
             vals = values[idx]
             ys = self._layer_y_positions(network_top, network_bottom, len(idx))
@@ -1081,7 +897,7 @@ class NNTrainingToolUI:
                 width=1,
             )
 
-        # Draw representative connections.
+        # Representative inter-layer edges (always visible for full context).
         for li in range(len(layer_defs) - 1):
             x1 = float(x_positions[li])
             x2 = float(x_positions[li + 1])
@@ -1100,7 +916,7 @@ class NNTrainingToolUI:
                         width=1,
                     )
 
-        # Highlight strongest-path chain across layers.
+        # Strongest activation path, revealed gradually as the "thinking" signal.
         strongest_full = [
             int(np.argmax(x_input)),
             int(np.argmax(dense1)),
@@ -1109,6 +925,8 @@ class NNTrainingToolUI:
             y_pred,
         ]
         for li in range(len(layer_defs) - 1):
+            if li >= thinking_segments:
+                continue
             i_idx = int(np.argmin(np.abs(sampled_indices[li] - strongest_full[li])))
             j_idx = int(np.argmin(np.abs(sampled_indices[li + 1] - strongest_full[li + 1])))
             canvas.create_line(
@@ -1120,23 +938,25 @@ class NNTrainingToolUI:
                 width=2,
             )
 
-        # Draw neurons with activation-driven color intensity.
+        # Neurons.
         for i, (name, total_n, _shown_n, _values, base_color) in enumerate(layer_defs):
             x = float(x_positions[i])
             vals = sampled_values[i]
             ys = y_positions[i]
             vmax = max(float(np.max(vals)), 1e-8)
             radius = 3.6 if len(ys) <= 18 else 3.0
+
             for vi, y in enumerate(ys):
                 intensity = float(vals[vi]) / vmax
                 fill = self._mix_with_white(base_color, 0.20 + (0.80 * intensity))
+                outline = base_color
                 canvas.create_oval(
                     x - radius,
                     float(y) - radius,
                     x + radius,
                     float(y) + radius,
                     fill=fill,
-                    outline=base_color,
+                    outline=outline,
                     width=1,
                 )
 
@@ -1157,7 +977,7 @@ class NNTrainingToolUI:
                 fill="#475569",
             )
 
-        # Output probability panel on the right for numeric readability.
+        # Probability panel.
         bar_x0 = right_network + 40
         bar_x1 = width - 28
         canvas.create_rectangle(
@@ -1169,10 +989,11 @@ class NNTrainingToolUI:
             outline="#cbd5e1",
             width=1,
         )
+        panel_title = "Softmax Probabilities"
         canvas.create_text(
             bar_x0 - 2,
             network_top - 10,
-            text="Softmax Probabilities",
+            text=panel_title,
             anchor="w",
             font=("Helvetica", 11, "bold"),
             fill="#0f172a",
@@ -1190,6 +1011,12 @@ class NNTrainingToolUI:
                 fill_color = "#16a34a"
             elif y_true is not None and digit == y_true:
                 fill_color = "#2563eb"
+            marker = ""
+            if y_true is not None and digit == y_true:
+                marker += " true"
+            if digit == y_pred:
+                marker += " pred"
+            pct_text = f"{p * 100:.1f}%"
 
             canvas.create_rectangle(
                 bar_x0,
@@ -1199,11 +1026,6 @@ class NNTrainingToolUI:
                 fill=fill_color,
                 outline=fill_color,
             )
-            marker = ""
-            if y_true is not None and digit == y_true:
-                marker += " true"
-            if digit == y_pred:
-                marker += " pred"
             canvas.create_text(
                 bar_x0 + 4,
                 (y0 + y1) / 2.0,
@@ -1215,32 +1037,21 @@ class NNTrainingToolUI:
             canvas.create_text(
                 bar_x1 - 4,
                 (y0 + y1) / 2.0,
-                text=f"{p * 100:.1f}%",
+                text=pct_text,
                 anchor="e",
                 font=("Helvetica", 9),
                 fill="#0f172a",
             )
 
-    def _format_top_contribs(
-        self,
-        values: np.ndarray,
-        prefix: str,
-        top_n: int = 5,
-    ) -> str:
-        # Show both positive and negative contributors for balance.
+    # ------------------------------
+    # Contributions
+    # ------------------------------
+    def _format_top_contribs(self, values: np.ndarray, prefix: str, top_n: int = 5) -> str:
         pos_idx = np.argsort(values)[-top_n:][::-1]
         neg_idx = np.argsort(values)[:top_n]
-
-        pos_lines = [
-            f"  + {prefix}{int(i):>3}: {float(values[i]): .5f}" for i in pos_idx
-        ]
-        neg_lines = [
-            f"  - {prefix}{int(i):>3}: {float(values[i]): .5f}" for i in neg_idx
-        ]
-
-        return "\n".join(
-            ["Top positive contributors:"] + pos_lines + ["Top negative contributors:"] + neg_lines
-        )
+        pos_lines = [f"  + {prefix}{int(i):>3}: {float(values[i]): .5f}" for i in pos_idx]
+        neg_lines = [f"  - {prefix}{int(i):>3}: {float(values[i]): .5f}" for i in neg_idx]
+        return "\n".join(["Top positive contributors:", *pos_lines, "Top negative contributors:", *neg_lines])
 
     def _render_contributor_text(
         self,
@@ -1251,29 +1062,16 @@ class NNTrainingToolUI:
         probs: np.ndarray,
         y_pred: int,
     ) -> None:
-        """
-        Simple explanation panel based on activation x weight scores.
-
-        This is not a full attribution method, but it is useful for
-        educational intuition about which neurons/pixels matter most.
-        """
-        # Contribution to predicted class from hidden2 neurons.
-        # Shape: (64,), each term is activation_i * weight_i_to_pred_class
         out_contrib = dense2 * self.w_out[:, y_pred]
 
-        # For learning context, inspect the strongest hidden2 neuron and
-        # decompose which hidden1 neurons drove it.
         top_h2 = int(np.argmax(dense2))
         h1_to_h2_contrib = dropout_out * self.w_dense2[:, top_h2]
 
-        # Also expose input-pixel influence for one top hidden1 neuron.
         top_h1 = int(np.argmax(dense1))
         input_to_h1_contrib = x * self.w_dense1[:, top_h1]
 
         sorted_probs = np.argsort(probs)[::-1]
-        top3 = ", ".join(
-            [f"{int(i)}={float(probs[i]) * 100:.2f}%" for i in sorted_probs[:3]]
-        )
+        top3 = ", ".join([f"{int(i)}={float(probs[i]) * 100:.2f}%" for i in sorted_probs[:3]])
 
         blocks = [
             "Prediction Summary",
@@ -1281,24 +1079,21 @@ class NNTrainingToolUI:
             f"  Top probabilities: {top3}",
             "",
             "A) Hidden2 -> Output contributors for predicted class",
-            "  Formula per neuron i: contribution_i = a2[i] * W_out[i, pred_class]",
+            "  contribution_i = a2[i] * W_out[i, pred_class]",
             self._format_top_contribs(out_contrib, prefix="h2_"),
             "",
             "B) Hidden1 -> strongest Hidden2 neuron contributors",
-            f"  Target strongest hidden2 neuron: h2_{top_h2}",
-            "  Formula per neuron j: contribution_j = a1_dropout[j] * W_dense2[j, h2_target]",
+            f"  target strongest hidden2 neuron: h2_{top_h2}",
+            "  contribution_j = a1_dropout[j] * W_dense2[j, h2_target]",
             self._format_top_contribs(h1_to_h2_contrib, prefix="h1_"),
             "",
             "C) Input pixel -> strongest Hidden1 neuron contributors",
-            f"  Target strongest hidden1 neuron: h1_{top_h1}",
-            "  Formula per pixel p: contribution_p = x[p] * W_dense1[p, h1_target]",
+            f"  target strongest hidden1 neuron: h1_{top_h1}",
+            "  contribution_p = x[p] * W_dense1[p, h1_target]",
             self._format_top_contribs(input_to_h1_contrib, prefix="px_"),
         ]
 
-        self.contrib_text.configure(state="normal")
-        self.contrib_text.delete("1.0", "end")
-        self.contrib_text.insert("1.0", "\n".join(blocks))
-        self.contrib_text.configure(state="disabled")
+        self._set_contributor_text("\n".join(blocks))
 
 
 def main() -> None:
