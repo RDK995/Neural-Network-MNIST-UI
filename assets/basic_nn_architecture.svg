@@ -1,56 +1,99 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
-  <title id="title">Basic Neural Network Architecture</title>
-  <desc id="desc">Input layer to dense hidden layers, dropout, and softmax output for MNIST classification.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" role="img" aria-labelledby="title desc">
+  <title id="title">How This Digit Classifier Works</title>
+  <desc id="desc">A clear, plain-language explanation of the MNIST neural network used to classify handwritten digits.</desc>
 
   <defs>
     <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#f4f8ff"/>
-      <stop offset="100%" stop-color="#eef7f1"/>
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#eef2ff"/>
     </linearGradient>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
     </marker>
     <style>
-      .node { fill: #ffffff; stroke: #334155; stroke-width: 2; rx: 12; }
-      .title { font: 700 18px 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #0f172a; }
-      .subtitle { font: 500 14px 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #334155; }
-      .label { font: 600 15px 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #0f172a; }
-      .detail { font: 400 13px 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #334155; }
-      .edge { stroke: #334155; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .title { font: 700 32px Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 16px Helvetica, Arial, sans-serif; fill: #334155; }
+      .node { fill: #ffffff; stroke: #334155; stroke-width: 1.8; rx: 12; }
+      .nodeTitle { font: 700 16px Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .nodeText { font: 500 13px Helvetica, Arial, sans-serif; fill: #334155; }
+      .shape { font: 600 13px Menlo, Consolas, monospace; fill: #1e293b; }
+      .edge { stroke: #334155; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .noteBox { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; rx: 12; }
+      .noteTitle { font: 700 15px Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .noteText { font: 500 13px Helvetica, Arial, sans-serif; fill: #334155; }
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1200" height="380" fill="url(#bgGrad)"/>
+  <rect x="0" y="0" width="1400" height="560" fill="url(#bgGrad)"/>
 
-  <text x="40" y="48" class="title">TensorFlow + Keras Basic NN (MNIST)</text>
-  <text x="40" y="74" class="subtitle">Input: flattened 28x28 image (784 features) -&gt; Output: 10 digit classes</text>
+  <text x="34" y="52" class="title">How This Handwritten-Digit Classifier Works</text>
+  <text x="34" y="80" class="subtitle">The model reads a 28x28 image and predicts which digit (0-9) is most likely.</text>
 
-  <rect class="node" x="40" y="130" width="190" height="120"/>
-  <text x="58" y="170" class="label">Input Layer</text>
-  <text x="58" y="197" class="detail">shape=(784,)</text>
-  <text x="58" y="222" class="detail">Flattened MNIST image</text>
+  <rect class="node" x="34" y="130" width="220" height="170"/>
+  <text x="52" y="163" class="nodeTitle">1) Input Image</text>
+  <text x="52" y="188" class="nodeText">A 28x28 grayscale digit image</text>
+  <text x="52" y="210" class="shape">28 x 28 = 784 pixels</text>
+  <text x="52" y="236" class="nodeText">Each pixel is normalized</text>
+  <text x="52" y="258" class="nodeText">to a value between 0 and 1</text>
 
-  <rect class="node" x="280" y="130" width="190" height="120"/>
-  <text x="298" y="170" class="label">Dense</text>
-  <text x="298" y="197" class="detail">units=128</text>
-  <text x="298" y="222" class="detail">activation=ReLU</text>
+  <rect class="node" x="286" y="130" width="230" height="170"/>
+  <text x="304" y="163" class="nodeTitle">2) Hidden Layer 1</text>
+  <text x="304" y="188" class="nodeText">128 neurons extract basic features</text>
+  <text x="304" y="210" class="shape">units: 128</text>
+  <text x="304" y="236" class="nodeText">Captures simple patterns</text>
+  <text x="304" y="258" class="nodeText">such as strokes and curves</text>
 
-  <rect class="node" x="520" y="130" width="170" height="120"/>
-  <text x="538" y="170" class="label">Dropout</text>
-  <text x="538" y="197" class="detail">rate=0.2</text>
+  <rect class="node" x="548" y="130" width="210" height="170"/>
+  <text x="566" y="163" class="nodeTitle">3) Dropout Regularization</text>
+  <text x="566" y="188" class="nodeText">Dropout (rate 0.2)</text>
+  <text x="566" y="210" class="shape">drops 20% during training</text>
+  <text x="566" y="236" class="nodeText">Reduces overfitting by preventing</text>
+  <text x="566" y="258" class="nodeText">the model from memorizing examples</text>
 
-  <rect class="node" x="740" y="130" width="190" height="120"/>
-  <text x="758" y="170" class="label">Dense</text>
-  <text x="758" y="197" class="detail">units=64</text>
-  <text x="758" y="222" class="detail">activation=ReLU</text>
+  <rect class="node" x="790" y="130" width="230" height="170"/>
+  <text x="808" y="163" class="nodeTitle">4) Hidden Layer 2</text>
+  <text x="808" y="188" class="nodeText">64 neurons refine the feature signal</text>
+  <text x="808" y="210" class="shape">units: 64</text>
+  <text x="808" y="236" class="nodeText">Combines earlier feature cues</text>
+  <text x="808" y="258" class="nodeText">before the final classification step</text>
 
-  <rect class="node" x="980" y="130" width="180" height="120"/>
-  <text x="998" y="170" class="label">Output Dense</text>
-  <text x="998" y="197" class="detail">units=10</text>
-  <text x="998" y="222" class="detail">activation=Softmax</text>
+  <rect class="node" x="1052" y="130" width="300" height="170"/>
+  <text x="1070" y="163" class="nodeTitle">5) Output Layer (Softmax)</text>
+  <text x="1070" y="188" class="nodeText">10 outputs for digits 0 to 9</text>
+  <text x="1070" y="210" class="shape">units: 10</text>
+  <text x="1070" y="236" class="nodeText">Each output is a class probability</text>
+  <text x="1070" y="258" class="nodeText">Prediction = class with highest probability</text>
 
-  <path class="edge" d="M 230 190 L 280 190"/>
-  <path class="edge" d="M 470 190 L 520 190"/>
-  <path class="edge" d="M 690 190 L 740 190"/>
-  <path class="edge" d="M 930 190 L 980 190"/>
+  <path class="edge" d="M 254 212 L 286 212"/>
+  <path class="edge" d="M 516 212 L 548 212"/>
+  <path class="edge" d="M 758 212 L 790 212"/>
+  <path class="edge" d="M 1020 212 L 1052 212"/>
+
+  <text x="262" y="116" class="shape">784</text>
+  <text x="524" y="116" class="shape">128</text>
+  <text x="766" y="116" class="shape">128</text>
+  <text x="1028" y="116" class="shape">64</text>
+  <text x="1362" y="116" text-anchor="end" class="shape">10</text>
+
+  <rect class="noteBox" x="34" y="338" width="430" height="180"/>
+  <text x="52" y="368" class="noteTitle">Training Process</text>
+  <text x="52" y="394" class="noteText">The model trains on many labeled examples.</text>
+  <text x="52" y="416" class="noteText">Errors are measured with a loss function,</text>
+  <text x="52" y="438" class="noteText">then weights are updated to reduce that loss.</text>
+  <text x="52" y="466" class="noteText">Repeating this across epochs improves</text>
+  <text x="52" y="488" class="noteText">general prediction accuracy.</text>
+
+  <rect class="noteBox" x="488" y="338" width="420" height="180"/>
+  <text x="506" y="368" class="noteTitle">Interpreting Confidence</text>
+  <text x="506" y="394" class="noteText">Example: probability 0.71 for digit 7 means</text>
+  <text x="506" y="416" class="noteText">the model currently favors class 7.</text>
+  <text x="506" y="438" class="noteText">Higher confidence is informative,</text>
+  <text x="506" y="460" class="noteText">but not a guarantee of correctness.</text>
+
+  <rect class="noteBox" x="932" y="338" width="420" height="180"/>
+  <text x="950" y="368" class="noteTitle">Prediction Example</text>
+  <text x="950" y="394" class="noteText">Output scores:</text>
+  <text x="950" y="416" class="noteText">[0:0.02, 1:0.04, ..., 7:0.71, ...]</text>
+  <text x="950" y="438" class="noteText">Highest value is 7, so predicted class = 7.</text>
+  <text x="950" y="460" class="noteText">Runner-up scores indicate uncertainty level.</text>
 </svg>

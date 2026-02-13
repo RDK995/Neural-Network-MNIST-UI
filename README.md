@@ -37,6 +37,12 @@ The run command also saves the trained model to:
 python src/nn_visual_trainer_ui.py
 ```
 
+Or use the UI launcher script:
+
+```bash
+./run_ui.sh
+```
+
 What the UI shows:
 - input digit image (from MNIST test set)
 - draw-your-own-digit canvas (white on black) for custom inference input
@@ -53,6 +59,7 @@ Notes:
 - if no saved model exists, the UI trains one automatically (3 epochs) and saves it
 - use dataset sample controls (or random button) to inspect known labels
 - use the draw canvas + `Run Drawn Digit` to test user-created inputs
+- drawn inputs are automatically preprocessed (crop, resize, center, normalize) to better match MNIST
 
 ## Model Architecture
 
@@ -61,3 +68,13 @@ Notes:
 ## Neuron-Level View
 
 ![Neuron-Level Architecture](assets/neural_network_neuron_level.svg)
+
+## Drawn Input Preprocessing
+
+![Drawn Digit Preprocessing Pipeline](assets/preprocessing_pipeline.svg)
+
+## Additional Explainability Visuals
+
+### Inference Flow
+
+![Inference Flow](assets/inference_flow.svg)

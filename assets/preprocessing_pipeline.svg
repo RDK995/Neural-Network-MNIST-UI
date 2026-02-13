@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="560" viewBox="0 0 1600 560" role="img" aria-labelledby="title desc">
+  <title id="title">Drawn Digit Preprocessing Pipeline</title>
+  <desc id="desc">Visual explanation of preprocessing stages applied before model inference: threshold/crop, resize to fit 20px box, center in 28x28 canvas, and normalize values.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#eef2ff"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      .title { font: 700 32px Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 16px Helvetica, Arial, sans-serif; fill: #334155; }
+      .step-title { font: 700 18px Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .step-text { font: 500 14px Helvetica, Arial, sans-serif; fill: #334155; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; rx: 14; }
+      .mini { fill: #111827; stroke: #64748b; stroke-width: 1.2; }
+      .edge { stroke: #334155; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .code { font: 600 13px Menlo, Consolas, monospace; fill: #1e293b; }
+      .note { font: 500 13px Helvetica, Arial, sans-serif; fill: #475569; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="560" fill="url(#bg)"/>
+
+  <text x="36" y="54" class="title">Drawn Digit Preprocessing Pipeline</text>
+  <text x="36" y="80" class="subtitle">Applied before inference in the interactive UI to make user drawings closer to MNIST-style inputs.</text>
+
+  <!-- Step 1 -->
+  <rect class="box" x="40" y="120" width="300" height="360"/>
+  <text x="60" y="155" class="step-title">1) Threshold + Crop</text>
+  <text x="60" y="182" class="step-text">Find foreground pixels and crop</text>
+  <text x="60" y="204" class="step-text">to the tight bounding box.</text>
+  <text x="60" y="236" class="code">mask = img &gt; 0.10</text>
+
+  <rect class="mini" x="95" y="260" width="190" height="190"/>
+  <rect x="130" y="295" width="120" height="120" fill="none" stroke="#22c55e" stroke-width="2" stroke-dasharray="6 4"/>
+  <path d="M170 390 L185 340 L200 360 L215 300 L230 388" fill="none" stroke="#e2e8f0" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Step 2 -->
+  <rect class="box" x="360" y="120" width="300" height="360"/>
+  <text x="380" y="155" class="step-title">2) Resize (Aspect Preserved)</text>
+  <text x="380" y="182" class="step-text">Scale cropped digit so max side</text>
+  <text x="380" y="204" class="step-text">fits into 20 pixels.</text>
+  <text x="380" y="236" class="code">scale = 20 / max(h, w)</text>
+
+  <rect class="mini" x="415" y="260" width="190" height="190"/>
+  <rect x="447" y="295" width="126" height="126" fill="none" stroke="#eab308" stroke-width="2"/>
+  <path d="M478 392 L492 350 L506 365 L520 314 L536 389" fill="none" stroke="#f8fafc" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Step 3 -->
+  <rect class="box" x="680" y="120" width="300" height="360"/>
+  <text x="700" y="155" class="step-title">3) Place in 28x28 Canvas</text>
+  <text x="700" y="182" class="step-text">Embed resized digit into a</text>
+  <text x="700" y="204" class="step-text">28x28 frame with margins.</text>
+  <text x="700" y="236" class="code">canvas[top:top+h, left:left+w]</text>
+
+  <rect class="mini" x="735" y="260" width="190" height="190"/>
+  <path d="M788 392 L800 350 L812 364 L824 312 L840 388" fill="none" stroke="#f8fafc" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="760" y="286" width="140" height="140" fill="none" stroke="#60a5fa" stroke-width="1.8" stroke-dasharray="4 3"/>
+
+  <!-- Step 4 -->
+  <rect class="box" x="1000" y="120" width="300" height="360"/>
+  <text x="1020" y="155" class="step-title">4) Center by Mass</text>
+  <text x="1020" y="182" class="step-text">Shift digit so center-of-mass</text>
+  <text x="1020" y="204" class="step-text">moves toward the image center.</text>
+  <text x="1020" y="236" class="code">shift = target - centroid</text>
+
+  <rect class="mini" x="1055" y="260" width="190" height="190"/>
+  <path d="M1120 390 L1132 348 L1144 363 L1158 312 L1170 388" fill="none" stroke="#f8fafc" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="1150" cy="355" r="5" fill="#f97316"/>
+  <line x1="1150" y1="355" x2="1150" y2="355" stroke="#f97316" stroke-width="2"/>
+  <line x1="1138" y1="355" x2="1162" y2="355" stroke="#f97316" stroke-width="1.5"/>
+  <line x1="1150" y1="343" x2="1150" y2="367" stroke="#f97316" stroke-width="1.5"/>
+
+  <!-- Step 5 -->
+  <rect class="box" x="1320" y="120" width="240" height="360"/>
+  <text x="1340" y="155" class="step-title">5) Normalize + Flatten</text>
+  <text x="1340" y="182" class="step-text">Clamp values to [0,1]</text>
+  <text x="1340" y="204" class="step-text">and reshape to 784 vector.</text>
+  <text x="1340" y="236" class="code">x = canvas.reshape(-1)</text>
+
+  <rect class="mini" x="1365" y="260" width="150" height="150"/>
+  <path d="M1414 389 L1424 355 L1434 367 L1446 326 L1458 389" fill="none" stroke="#f8fafc" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="1365" y="426" width="150" height="22" fill="#e2e8f0"/>
+  <rect x="1365" y="426" width="108" height="22" fill="#16a34a"/>
+  <text x="1440" y="442" text-anchor="middle" class="step-text">0.0 .. 1.0</text>
+
+  <!-- Arrows -->
+  <path class="edge" d="M340 300 L360 300"/>
+  <path class="edge" d="M660 300 L680 300"/>
+  <path class="edge" d="M980 300 L1000 300"/>
+  <path class="edge" d="M1300 300 L1320 300"/>
+
+  <text x="40" y="525" class="note">UI file: src/nn_visual_trainer_ui.py · Method: _preprocess_drawn_digit()</text>
+</svg>
