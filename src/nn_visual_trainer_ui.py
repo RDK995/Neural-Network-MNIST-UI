@@ -25,6 +25,19 @@ from basic_nn import MODEL_PATH, build_model, load_data
 DRAW_GRID_SIZE = 28
 DRAW_CANVAS_SIZE = 280
 
+COLOR_BG = "#f3f7fb"
+COLOR_CARD = "#ffffff"
+COLOR_INK = "#0f172a"
+COLOR_SUB = "#475569"
+COLOR_EDGE = "#cbd5e1"
+COLOR_ACCENT = "#0f766e"
+COLOR_ACCENT_LIGHT = "#e6fffb"
+COLOR_WARNING = "#b45309"
+COLOR_STATUS_INFO_BG = "#e0f2fe"
+COLOR_STATUS_INFO_FG = "#0c4a6e"
+COLOR_STATUS_WARN_BG = "#fff7ed"
+COLOR_STATUS_WARN_FG = "#9a3412"
+
 
 def load_or_train_model(model_path: Path) -> keras.Model:
     # Reuse an existing trained model when available.
@@ -61,6 +74,8 @@ class NNTrainingToolUI:
         self.root = root
         self.root.title("MNIST Neural Network Decision Explorer")
         self.root.geometry("1500x980")
+        self.root.minsize(1300, 860)
+        self.root.configure(bg=COLOR_BG)
 
         self.status_var = tk.StringVar(value="Loading data and model...")
         self.prediction_var = tk.StringVar(value="Prediction: -")
@@ -68,7 +83,9 @@ class NNTrainingToolUI:
 
         self.draw_buffer = np.zeros((DRAW_GRID_SIZE, DRAW_GRID_SIZE), dtype=np.float32)
 
+        self._configure_styles()
         self._build_layout()
+        self._bind_accessibility_shortcuts()
 
         # Load dataset + model once at startup.
         self.x_train, self.y_train, self.x_test, self.y_test = load_data()
@@ -92,11 +109,154 @@ class NNTrainingToolUI:
 
         self._cache_layer_weights()
 
-        self.status_var.set(
-            "Ready. Use test samples or draw your own digit and run decision flow."
+        self._set_status(
+            "Ready. Use test samples or draw your own digit and run decision flow.",
+            level="info",
         )
         self.update_view_from_dataset()
         self._redraw_draw_canvas()
+
+    def _configure_styles(self) -> None:
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+
+        style.configure("App.TFrame", background=COLOR_BG)
+        style.configure("Card.TFrame", background=COLOR_CARD)
+
+        style.configure(
+            "Title.TLabel",
+            background=COLOR_BG,
+            foreground=COLOR_INK,
+            font=("Avenir Next", 20, "bold"),
+        )
+        style.configure(
+            "Subtitle.TLabel",
+            background=COLOR_BG,
+            foreground=COLOR_SUB,
+            font=("Avenir Next", 11),
+        )
+        style.configure(
+            "Section.TLabel",
+            background=COLOR_CARD,
+            foreground=COLOR_INK,
+            font=("Avenir Next", 11, "bold"),
+        )
+        style.configure(
+            "Body.TLabel",
+            background=COLOR_CARD,
+            foreground=COLOR_SUB,
+            font=("Avenir Next", 10),
+        )
+        style.configure(
+            "Status.TLabel",
+            background=COLOR_BG,
+            foreground=COLOR_SUB,
+            font=("Avenir Next", 10),
+        )
+
+        style.configure(
+            "Card.TLabelframe",
+            background=COLOR_CARD,
+            foreground=COLOR_INK,
+            borderwidth=1,
+            relief="solid",
+        )
+        style.configure(
+            "Card.TLabelframe.Label",
+            background=COLOR_CARD,
+            foreground=COLOR_INK,
+            font=("Avenir Next", 10, "bold"),
+        )
+
+        style.configure(
+            "Accent.TButton",
+            background="#d1d5db",
+            foreground="#111827",
+            borderwidth=0,
+            focusthickness=0,
+            font=("Avenir Next", 10, "bold"),
+            padding=(12, 8),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", "#c4c9d1"), ("pressed", "#b9bec6")],
+            foreground=[("disabled", "#9ca3af"), ("!disabled", "#111827")],
+        )
+        style.configure(
+            "Subtle.TButton",
+            background=COLOR_ACCENT_LIGHT,
+            foreground=COLOR_ACCENT,
+            borderwidth=1,
+            font=("Avenir Next", 10, "bold"),
+            padding=(12, 8),
+        )
+        style.map(
+            "Subtle.TButton",
+            background=[("active", "#ccfbf1"), ("pressed", "#b8f7ea")],
+            foreground=[("!disabled", "#115e59")],
+        )
+        style.configure(
+            "Neutral.TButton",
+            background="#e5e7eb",
+            foreground="#1f2937",
+            borderwidth=1,
+            font=("Avenir Next", 10, "bold"),
+            padding=(12, 8),
+        )
+        style.map(
+            "Neutral.TButton",
+            background=[("active", "#d1d5db"), ("pressed", "#c7ccd4")],
+            foreground=[("!disabled", "#111827")],
+        )
+        style.configure(
+            "DrawPrimary.TButton",
+            background="#d1d5db",
+            foreground="#111827",
+            borderwidth=0,
+            font=("Avenir Next", 14, "bold"),
+            padding=(20, 16),
+        )
+        style.map(
+            "DrawPrimary.TButton",
+            background=[("active", "#c4c9d1"), ("pressed", "#b9bec6")],
+            foreground=[("!disabled", "#111827")],
+        )
+        style.configure(
+            "DrawSecondary.TButton",
+            background="#ecfeff",
+            foreground="#0f766e",
+            borderwidth=1,
+            font=("Avenir Next", 14, "bold"),
+            padding=(20, 16),
+        )
+        style.map(
+            "DrawSecondary.TButton",
+            background=[("active", "#cffafe"), ("pressed", "#bae6fd")],
+            foreground=[("!disabled", "#115e59")],
+        )
+        style.map(
+            "Accent.TButton",
+            bordercolor=[("focus", "#134e4a")],
+        )
+        style.map(
+            "Subtle.TButton",
+            bordercolor=[("focus", "#0f766e")],
+        )
+        style.map(
+            "DrawPrimary.TButton",
+            bordercolor=[("focus", "#134e4a")],
+        )
+        style.map(
+            "DrawSecondary.TButton",
+            bordercolor=[("focus", "#0f766e")],
+        )
+
+        style.configure(
+            "App.TSpinbox",
+            fieldbackground="#f8fafc",
+            foreground=COLOR_INK,
+            padding=4,
+        )
 
     def _ensure_model_is_callable(self) -> None:
         # Keras 3 may load a Sequential model without creating symbolic input
@@ -104,6 +264,28 @@ class NNTrainingToolUI:
         if not self.model.built:
             self.model.build((None, 784))
         _ = self.model(np.zeros((1, 784), dtype=np.float32), training=False)
+
+    def _bind_accessibility_shortcuts(self) -> None:
+        # Keyboard alternatives for common actions improve non-mouse usability.
+        self.root.bind("<Return>", lambda _event: self.update_view_from_dataset())
+        self.root.bind("<KP_Enter>", lambda _event: self.update_view_from_dataset())
+        self.root.bind("r", lambda _event: self.pick_random_sample())
+        self.root.bind("R", lambda _event: self.pick_random_sample())
+        self.root.bind("d", lambda _event: self.update_view_from_drawn())
+        self.root.bind("D", lambda _event: self.update_view_from_drawn())
+
+    def _set_status(self, message: str, level: str = "info") -> None:
+        self.status_var.set(message)
+        if level == "warn":
+            self.status_label.configure(
+                bg=COLOR_STATUS_WARN_BG,
+                fg=COLOR_STATUS_WARN_FG,
+            )
+        else:
+            self.status_label.configure(
+                bg=COLOR_STATUS_INFO_BG,
+                fg=COLOR_STATUS_INFO_FG,
+            )
 
     def _cache_layer_weights(self) -> None:
         # Dense1: input(784) -> hidden1(128)
@@ -115,16 +297,16 @@ class NNTrainingToolUI:
 
     def _build_layout(self) -> None:
         # Top-level layout: header, controls, left input panel, right analysis panel.
-        outer = ttk.Frame(self.root, padding=12)
+        outer = ttk.Frame(self.root, padding=14, style="App.TFrame")
         outer.pack(fill="both", expand=True)
 
-        header = ttk.Frame(outer)
-        header.pack(fill="x", pady=(0, 8))
+        header = ttk.Frame(outer, style="App.TFrame")
+        header.pack(fill="x", pady=(0, 10))
 
         ttk.Label(
             header,
             text="MNIST Neural Network Decision Explorer",
-            font=("Helvetica", 18, "bold"),
+            style="Title.TLabel",
         ).pack(anchor="w")
         ttk.Label(
             header,
@@ -132,15 +314,18 @@ class NNTrainingToolUI:
                 "Training tool: inspect stage-by-stage activations, then review "
                 "which neurons contributed most to the final decision."
             ),
-            font=("Helvetica", 11),
+            style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(2, 0))
 
-        controls = ttk.LabelFrame(outer, text="Dataset Input Controls", padding=10)
+        controls = ttk.LabelFrame(
+            outer, text="Dataset Input Controls", padding=12, style="Card.TLabelframe"
+        )
         controls.pack(fill="x", pady=(0, 10))
+        controls.grid_columnconfigure(6, weight=1)
 
         self.index_var = tk.IntVar(value=0)
 
-        ttk.Label(controls, text="MNIST test sample index:").grid(
+        ttk.Label(controls, text="MNIST test sample index:", style="Section.TLabel").grid(
             row=0, column=0, padx=(0, 6), pady=4, sticky="w"
         )
         self.index_spin = ttk.Spinbox(
@@ -149,50 +334,70 @@ class NNTrainingToolUI:
             to=9999,
             textvariable=self.index_var,
             width=10,
+            style="App.TSpinbox",
         )
         self.index_spin.grid(row=0, column=1, padx=(0, 8), pady=4, sticky="w")
 
         ttk.Button(
-            controls, text="Run Dataset Sample", command=self.update_view_from_dataset
+            controls,
+            text="Run Dataset Sample",
+            command=self.update_view_from_dataset,
+            style="Accent.TButton",
         ).grid(row=0, column=2, padx=(0, 8), pady=4, sticky="w")
 
         ttk.Button(
-            controls, text="Random Sample", command=self.pick_random_sample
+            controls,
+            text="Random Sample",
+            command=self.pick_random_sample,
+            style="Neutral.TButton",
         ).grid(row=0, column=3, padx=(0, 8), pady=4, sticky="w")
 
         ttk.Button(
-            controls, text="Run Drawn Digit", command=self.update_view_from_drawn
+            controls,
+            text="Run Drawn Digit",
+            command=self.update_view_from_drawn,
+            style="Accent.TButton",
         ).grid(row=0, column=4, padx=(0, 8), pady=4, sticky="w")
+        ttk.Button(
+            controls,
+            text="Clear Drawn Digit",
+            command=self.clear_drawing,
+            style="Neutral.TButton",
+        ).grid(row=0, column=5, padx=(0, 8), pady=4, sticky="w")
 
         ttk.Label(
             controls,
             text=(
                 "Tip: use low-confidence outputs and compare contributor lists to "
-                "teach how decision boundaries behave."
+                "teach how decision boundaries behave. Shortcuts: Enter=run sample, "
+                "R=random sample, D=run drawn, C/Esc=clear drawing."
             ),
-        ).grid(row=1, column=0, columnspan=5, pady=(2, 0), sticky="w")
+            style="Body.TLabel",
+        ).grid(row=1, column=0, columnspan=7, pady=(6, 0), sticky="w")
 
-        results = ttk.Frame(outer)
+        results = ttk.Frame(outer, style="App.TFrame")
         results.pack(fill="both", expand=True)
 
-        left = ttk.LabelFrame(results, text="Input Sources", padding=10)
-        left.pack(side="left", fill="y", padx=(0, 8))
+        left = ttk.LabelFrame(results, text="Input Sources", padding=10, style="Card.TLabelframe")
+        left.pack(side="left", fill="y", padx=(0, 10))
 
         self._build_left_panel(left)
 
-        right = ttk.Frame(results)
+        right = ttk.Frame(results, style="App.TFrame")
         right.pack(side="left", fill="both", expand=True)
 
-        decision_frame = ttk.LabelFrame(right, text="Decision Stages", padding=10)
+        decision_frame = ttk.LabelFrame(
+            right, text="Decision Stages", padding=10, style="Card.TLabelframe"
+        )
         decision_frame.pack(fill="both", expand=True)
 
         self.stages_canvas = tk.Canvas(
             decision_frame,
             width=1040,
             height=560,
-            bg="#f8fafc",
+            bg="#f4f8ff",
             highlightthickness=1,
-            highlightbackground="#94a3b8",
+            highlightbackground=COLOR_EDGE,
         )
         self.stages_canvas.pack(fill="both", expand=True)
 
@@ -200,33 +405,57 @@ class NNTrainingToolUI:
             right,
             text="Top Contributing Neurons (activation x weight)",
             padding=8,
+            style="Card.TLabelframe",
         )
         contrib_frame.pack(fill="both", expand=False, pady=(8, 0))
 
         self.contrib_text = tk.Text(
             contrib_frame,
-            width=110,
+            width=102,
             height=11,
             wrap="word",
-            bg="#ffffff",
-            fg="#0f172a",
+            bg="#fcfdff",
+            fg=COLOR_INK,
             font=("Menlo", 11),
             highlightthickness=1,
-            highlightbackground="#cbd5e1",
+            highlightbackground=COLOR_EDGE,
+            relief="flat",
+            padx=10,
+            pady=10,
         )
-        self.contrib_text.pack(fill="both", expand=True)
+        contrib_scroll = ttk.Scrollbar(
+            contrib_frame,
+            orient="vertical",
+            command=self.contrib_text.yview,
+        )
+        self.contrib_text.configure(yscrollcommand=contrib_scroll.set)
+        self.contrib_text.pack(side="left", fill="both", expand=True)
+        contrib_scroll.pack(side="right", fill="y")
         self.contrib_text.configure(state="disabled")
 
-        status_frame = ttk.Frame(outer)
+        status_frame = ttk.Frame(outer, style="App.TFrame")
         status_frame.pack(fill="x", pady=(8, 0))
-        ttk.Label(status_frame, textvariable=self.status_var).pack(anchor="w")
+        self.status_label = tk.Label(
+            status_frame,
+            textvariable=self.status_var,
+            bg=COLOR_STATUS_INFO_BG,
+            fg=COLOR_STATUS_INFO_FG,
+            font=("Avenir Next", 10, "bold"),
+            padx=10,
+            pady=8,
+            anchor="w",
+            relief="flat",
+        )
+        self.status_label.pack(fill="x", anchor="w")
 
     def _build_left_panel(self, container: ttk.LabelFrame) -> None:
         # Left side contains:
         # 1) current input view (what is being inferred)
         # 2) draw canvas for user-created digits
         # 3) model-input preview (post-preprocessing 28x28)
-        sample_frame = ttk.LabelFrame(container, text="Current Input (28x28)", padding=8)
+        sample_frame = ttk.LabelFrame(
+            container, text="Current Input (28x28)", padding=8, style="Card.TLabelframe"
+        )
         sample_frame.pack(fill="x")
 
         self.input_canvas = tk.Canvas(
@@ -235,22 +464,24 @@ class NNTrainingToolUI:
             height=360,
             bg="#111827",
             highlightthickness=1,
-            highlightbackground="#94a3b8",
+            highlightbackground=COLOR_EDGE,
         )
         self.input_canvas.pack()
 
         ttk.Label(
             sample_frame,
             textvariable=self.truth_var,
-            font=("Helvetica", 12, "bold"),
+            style="Section.TLabel",
         ).pack(anchor="w", pady=(10, 2))
         ttk.Label(
             sample_frame,
             textvariable=self.prediction_var,
-            font=("Helvetica", 12, "bold"),
+            style="Section.TLabel",
         ).pack(anchor="w")
 
-        draw_frame = ttk.LabelFrame(container, text="Draw Your Own Digit", padding=8)
+        draw_frame = ttk.LabelFrame(
+            container, text="Draw Your Own Digit", padding=8, style="Card.TLabelframe"
+        )
         draw_frame.pack(fill="x", pady=(10, 0))
 
         self.draw_canvas = tk.Canvas(
@@ -259,7 +490,9 @@ class NNTrainingToolUI:
             height=DRAW_CANVAS_SIZE,
             bg="#111827",
             highlightthickness=1,
-            highlightbackground="#94a3b8",
+            highlightbackground=COLOR_EDGE,
+            cursor="crosshair",
+            takefocus=1,
         )
         self.draw_canvas.pack()
 
@@ -269,25 +502,20 @@ class NNTrainingToolUI:
         self.root.bind("c", lambda _event: self.clear_drawing())
         self.root.bind("C", lambda _event: self.clear_drawing())
 
-        draw_buttons = ttk.Frame(draw_frame)
-        draw_buttons.pack(fill="x", pady=(8, 0))
-        ttk.Button(draw_buttons, text="Clear Drawing", command=self.clear_drawing).pack(
-            side="left", padx=(0, 6)
-        )
-        ttk.Button(
-            draw_buttons, text="Run Drawn Digit", command=self.update_view_from_drawn
-        ).pack(side="left")
-
         ttk.Label(
             draw_frame,
             text=(
-                "Draw in white on black. Use 'Run Drawn Digit' for inference. "
-                "Clear: button, C key, or Esc."
+                "Draw in white on black. Use top controls (or D key) to run "
+                "inference. Clear with top control, C key, or Esc."
             ),
+            style="Body.TLabel",
         ).pack(anchor="w", pady=(8, 0))
 
         preview_frame = ttk.LabelFrame(
-            container, text="Model Input Preview (28x28 after preprocessing)", padding=8
+            container,
+            text="Model Input Preview (28x28 after preprocessing)",
+            padding=8,
+            style="Card.TLabelframe",
         )
         preview_frame.pack(fill="x", pady=(10, 0))
 
@@ -297,13 +525,14 @@ class NNTrainingToolUI:
             height=196,
             bg="#111827",
             highlightthickness=1,
-            highlightbackground="#94a3b8",
+            highlightbackground=COLOR_EDGE,
         )
         self.model_input_canvas.pack()
 
         ttk.Label(
             preview_frame,
             text="This is exactly what the model receives for prediction.",
+            style="Body.TLabel",
         ).pack(anchor="w", pady=(8, 0))
 
     def _on_draw(self, event: tk.Event) -> None:
@@ -364,7 +593,7 @@ class NNTrainingToolUI:
         # Reset draw buffer and redraw an empty canvas.
         self.draw_buffer.fill(0.0)
         self._redraw_draw_canvas()
-        self.status_var.set("Drawing cleared.")
+        self._set_status("Drawing cleared.", level="info")
 
     def pick_random_sample(self) -> None:
         self.index_var.set(random.randint(0, self.max_index))
@@ -375,11 +604,14 @@ class NNTrainingToolUI:
         try:
             idx = int(self.index_var.get())
         except (ValueError, tk.TclError):
-            self.status_var.set("Invalid index. Please enter a number.")
+            self._set_status("Invalid index. Please enter a number.", level="warn")
             return
 
         if idx < 0 or idx > self.max_index:
-            self.status_var.set(f"Index out of range. Use 0 to {self.max_index}.")
+            self._set_status(
+                f"Index out of range. Use 0 to {self.max_index}.",
+                level="warn",
+            )
             return
 
         x = self.x_test[idx]
@@ -394,7 +626,7 @@ class NNTrainingToolUI:
         # Preprocess drawn input to be closer to MNIST-style digits.
         x = self._preprocess_drawn_digit(self.draw_buffer)
         if float(np.max(x)) <= 0.0:
-            self.status_var.set("Draw a digit first, then run inference.")
+            self._set_status("Draw a digit first, then run inference.", level="warn")
             return
 
         self._run_inference_and_render(
@@ -503,8 +735,9 @@ class NNTrainingToolUI:
         self.prediction_var.set(
             f"Prediction: {y_pred}  (confidence {confidence * 100:.2f}%)"
         )
-        self.status_var.set(
-            f"{input_label} processed. Review activation stages and contributor lists."
+        self._set_status(
+            f"{input_label} processed. Review activation stages and contributor lists.",
+            level="info",
         )
 
         self._draw_input_image(x.reshape(28, 28))
