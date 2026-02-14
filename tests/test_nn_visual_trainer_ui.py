@@ -125,3 +125,22 @@ def test_schedule_live_prediction_runs_immediately_when_interval_elapsed(monkeyp
 
     assert called["live"] == 1
     assert ui._live_predict_job is None
+
+
+def test_on_draw_skips_redundant_work_for_same_cell() -> None:
+    """Dragging within one logical cell should not repaint repeatedly."""
+    ui = _make_ui_shell()
+    ui._last_draw_cell = None
+
+    calls = {"paint": 0, "draw": 0, "schedule": 0}
+    ui._paint_to_draw_buffer = lambda _row, _col: calls.__setitem__("paint", calls["paint"] + 1)
+    ui._draw_digit_canvas = lambda: calls.__setitem__("draw", calls["draw"] + 1)
+    ui._schedule_live_draw_prediction = lambda: calls.__setitem__("schedule", calls["schedule"] + 1)
+
+    event = type("Evt", (), {"x": 10, "y": 10})()
+    ui._on_draw(event)
+    ui._on_draw(event)
+
+    assert calls["paint"] == 1
+    assert calls["draw"] == 1
+    assert calls["schedule"] == 1

@@ -16,4 +16,4 @@ echo "Installing/updating dependencies..."
 pip install -r "${ROOT_DIR}/requirements.txt"
 
 echo "Starting interactive training UI..."
-python "${ROOT_DIR}/src/mnist_explorer/app.py"
+PYTHONPATH="${ROOT_DIR}/src" python -m mnist_explorer
