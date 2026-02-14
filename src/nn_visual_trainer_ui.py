@@ -36,6 +36,7 @@ from ui_constants import (
     DRAW_BRUSH,
     DRAW_CANVAS_SIZE,
     DRAW_GRID_SIZE,
+    LIVE_DRAW_PREDICT_DEBOUNCE_MS,
     THINK_STAGE_LABELS,
     THINK_STEP_MS,
     WINDOW_MIN_SIZE,
@@ -82,6 +83,8 @@ class NNTrainingToolUI:
         # _thinking_context stores values needed across animation frames.
         self._thinking_job: str | None = None
         self._thinking_context: dict[str, object] | None = None
+        # Debounced callback id for real-time prediction while drawing.
+        self._live_predict_job: str | None = None
 
         # Build visual style and layout before loading data/model so the user
         # sees a responsive window early.
@@ -478,6 +481,61 @@ class NNTrainingToolUI:
         row = int(event.y / cell_size)
         self._paint_to_draw_buffer(row, col)
         self._draw_digit_canvas()
+        self._schedule_live_draw_prediction()
+
+    def _schedule_live_draw_prediction(self) -> None:
+        """Debounce live inference so prediction updates feel real-time.
+
+        We delay by a short window to avoid running model inference for every
+        mouse event while still keeping the UI responsive.
+        """
+        if self._live_predict_job is not None:
+            self.root.after_cancel(self._live_predict_job)
+            self._live_predict_job = None
+
+        # While user is drawing, stop any staged thinking animation from a
+        # previous run so visual state stays consistent with live updates.
+        self._cancel_thinking_animation()
+        self._live_predict_job = self.root.after(
+            LIVE_DRAW_PREDICT_DEBOUNCE_MS,
+            self._run_live_draw_prediction,
+        )
+
+    def _run_live_draw_prediction(self) -> None:
+        """Run inference against current drawing and update UI immediately."""
+        self._live_predict_job = None
+
+        x = preprocess_drawn_digit(self.draw_buffer)
+        if float(np.max(x)) <= 0.0:
+            self.truth_var.set("Ground Truth: N/A (drawn input)")
+            self.prediction_var.set("Prediction: -")
+            self._draw_model_input_preview(x.reshape(28, 28))
+            return
+
+        dense1, dropout_out, dense2, probs = run_probe_prediction(self.probe_model, x)
+        y_pred = int(np.argmax(probs))
+        confidence = float(probs[y_pred])
+
+        self.truth_var.set("Ground Truth: N/A (drawn input)")
+        self.prediction_var.set(
+            f"Live prediction: {y_pred}  (confidence {confidence * 100:.2f}%)"
+        )
+
+        image_2d = x.reshape(28, 28)
+        self._draw_input_image(image_2d)
+        self._draw_model_input_preview(image_2d)
+        # Keep full network visible and draw final-stage path for live updates.
+        self._draw_decision_stages(
+            x,
+            dense1,
+            dropout_out,
+            dense2,
+            probs,
+            y_true=None,
+            y_pred=y_pred,
+            thinking_stage=4,
+        )
+        self._render_contributor_text(x, dense1, dropout_out, dense2, probs, y_pred)
 
     def _paint_to_draw_buffer(self, row: int, col: int) -> None:
         """Paint a soft brush stamp centered at (row, col)."""
@@ -498,8 +556,13 @@ class NNTrainingToolUI:
     def clear_drawing(self) -> None:
         """Clear drawing buffer and stop active thinking animation."""
         self._cancel_thinking_animation()
+        if self._live_predict_job is not None:
+            self.root.after_cancel(self._live_predict_job)
+            self._live_predict_job = None
         self.draw_buffer.fill(0.0)
         self._draw_digit_canvas()
+        self.truth_var.set("Ground Truth: -")
+        self.prediction_var.set("Prediction: -")
         self._set_status("Drawing cleared.", level="info")
 
     def pick_random_sample(self) -> None:
@@ -528,6 +591,9 @@ class NNTrainingToolUI:
 
     def update_view_from_drawn(self) -> None:
         """Preprocess user drawing and run inference/explanation flow."""
+        if self._live_predict_job is not None:
+            self.root.after_cancel(self._live_predict_job)
+            self._live_predict_job = None
         x = preprocess_drawn_digit(self.draw_buffer)
         if float(np.max(x)) <= 0.0:
             self._set_status("Draw a digit first, then run inference.", level="warn")

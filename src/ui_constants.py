@@ -50,6 +50,9 @@ DRAW_BRUSH = [
 
 # Time between "thinking" animation stages in milliseconds.
 THINK_STEP_MS = 320
+# Debounce delay for running live predictions while drawing.
+# Lower is more responsive, higher uses less CPU.
+LIVE_DRAW_PREDICT_DEBOUNCE_MS = 120
 # Human-readable labels shown while animation advances layer-by-layer.
 THINK_STAGE_LABELS = [
     "Reading the input pixels",
