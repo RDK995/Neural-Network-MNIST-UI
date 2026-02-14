@@ -15,6 +15,7 @@ diagram visible for context.
 
 import random
 import tkinter as tk
+import time
 from tkinter import ttk
 
 import numpy as np
@@ -36,7 +37,8 @@ from ui_constants import (
     DRAW_BRUSH,
     DRAW_CANVAS_SIZE,
     DRAW_GRID_SIZE,
-    LIVE_DRAW_PREDICT_DEBOUNCE_MS,
+    LIVE_DRAW_HEAVY_REFRESH_INTERVAL_MS,
+    LIVE_DRAW_PREDICT_INTERVAL_MS,
     THINK_STAGE_LABELS,
     THINK_STEP_MS,
     WINDOW_MIN_SIZE,
@@ -83,8 +85,13 @@ class NNTrainingToolUI:
         # _thinking_context stores values needed across animation frames.
         self._thinking_job: str | None = None
         self._thinking_context: dict[str, object] | None = None
-        # Debounced callback id for real-time prediction while drawing.
+        # Scheduled callback id for real-time prediction while drawing.
         self._live_predict_job: str | None = None
+        # Timestamp of the last live prediction pass for throttling.
+        self._last_live_predict_ts = 0.0
+        # Timestamp + class cache for throttling expensive visual refreshes.
+        self._last_live_heavy_render_ts = 0.0
+        self._last_live_heavy_pred: int | None = None
 
         # Build visual style and layout before loading data/model so the user
         # sees a responsive window early.
@@ -293,23 +300,16 @@ class NNTrainingToolUI:
 
         ttk.Button(
             controls,
-            text="Run Drawn Digit",
-            command=self.update_view_from_drawn,
-            style="Neutral.TButton",
-        ).grid(row=0, column=4, padx=(0, 8), pady=4, sticky="w")
-
-        ttk.Button(
-            controls,
             text="Clear Drawn Digit",
             command=self.clear_drawing,
             style="Neutral.TButton",
-        ).grid(row=0, column=5, padx=(0, 8), pady=4, sticky="w")
+        ).grid(row=0, column=4, padx=(0, 8), pady=4, sticky="w")
 
         ttk.Label(
             controls,
             text=(
                 "Shortcuts: Enter=run sample, R=random sample, "
-                "D=run drawn, C/Esc=clear drawing."
+                "D=run drawn, C/Esc=clear drawing. Draw panel predicts in real time."
             ),
             style="Body.TLabel",
         ).grid(row=1, column=0, columnspan=7, pady=(6, 0), sticky="w")
@@ -484,26 +484,36 @@ class NNTrainingToolUI:
         self._schedule_live_draw_prediction()
 
     def _schedule_live_draw_prediction(self) -> None:
-        """Debounce live inference so prediction updates feel real-time.
+        """Throttle live inference so updates happen regularly while drawing.
 
-        We delay by a short window to avoid running model inference for every
-        mouse event while still keeping the UI responsive.
+        Unlike pure debounce, this gives users steady refreshes even when they
+        continuously draw (mouse events keep firing).
         """
-        if self._live_predict_job is not None:
-            self.root.after_cancel(self._live_predict_job)
-            self._live_predict_job = None
-
         # While user is drawing, stop any staged thinking animation from a
         # previous run so visual state stays consistent with live updates.
         self._cancel_thinking_animation()
-        self._live_predict_job = self.root.after(
-            LIVE_DRAW_PREDICT_DEBOUNCE_MS,
-            self._run_live_draw_prediction,
-        )
+
+        now = time.monotonic()
+        interval_s = LIVE_DRAW_PREDICT_INTERVAL_MS / 1000.0
+        elapsed = now - self._last_live_predict_ts
+
+        # If enough time passed, run immediately for a snappy feel.
+        if elapsed >= interval_s:
+            if self._live_predict_job is not None:
+                self.root.after_cancel(self._live_predict_job)
+                self._live_predict_job = None
+            self._run_live_draw_prediction()
+            return
+
+        # Otherwise schedule one trailing update if not already queued.
+        if self._live_predict_job is None:
+            delay_ms = max(1, int((interval_s - elapsed) * 1000))
+            self._live_predict_job = self.root.after(delay_ms, self._run_live_draw_prediction)
 
     def _run_live_draw_prediction(self) -> None:
         """Run inference against current drawing and update UI immediately."""
         self._live_predict_job = None
+        self._last_live_predict_ts = time.monotonic()
 
         x = preprocess_drawn_digit(self.draw_buffer)
         if float(np.max(x)) <= 0.0:
@@ -522,20 +532,30 @@ class NNTrainingToolUI:
         )
 
         image_2d = x.reshape(28, 28)
-        self._draw_input_image(image_2d)
+        # Lightweight live refresh: always keep model input preview current.
         self._draw_model_input_preview(image_2d)
-        # Keep full network visible and draw final-stage path for live updates.
-        self._draw_decision_stages(
-            x,
-            dense1,
-            dropout_out,
-            dense2,
-            probs,
-            y_true=None,
-            y_pred=y_pred,
-            thinking_stage=4,
-        )
-        self._render_contributor_text(x, dense1, dropout_out, dense2, probs, y_pred)
+
+        # Heavy refresh (network graph + contributor text) is throttled to
+        # reduce draw lag. We still force refresh when predicted class changes.
+        now = self._last_live_predict_ts
+        heavy_interval_s = LIVE_DRAW_HEAVY_REFRESH_INTERVAL_MS / 1000.0
+        class_changed = self._last_live_heavy_pred != y_pred
+        due_for_heavy = (now - self._last_live_heavy_render_ts) >= heavy_interval_s
+        if class_changed or due_for_heavy:
+            self._draw_input_image(image_2d)
+            self._draw_decision_stages(
+                x,
+                dense1,
+                dropout_out,
+                dense2,
+                probs,
+                y_true=None,
+                y_pred=y_pred,
+                thinking_stage=4,
+            )
+            self._render_contributor_text(x, dense1, dropout_out, dense2, probs, y_pred)
+            self._last_live_heavy_render_ts = now
+            self._last_live_heavy_pred = y_pred
 
     def _paint_to_draw_buffer(self, row: int, col: int) -> None:
         """Paint a soft brush stamp centered at (row, col)."""
@@ -559,6 +579,8 @@ class NNTrainingToolUI:
         if self._live_predict_job is not None:
             self.root.after_cancel(self._live_predict_job)
             self._live_predict_job = None
+        self._last_live_heavy_pred = None
+        self._last_live_heavy_render_ts = 0.0
         self.draw_buffer.fill(0.0)
         self._draw_digit_canvas()
         self.truth_var.set("Ground Truth: -")
