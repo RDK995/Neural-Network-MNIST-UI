@@ -15,134 +15,93 @@ diagram visible for context.
 
 import random
 import tkinter as tk
-from pathlib import Path
 from tkinter import ttk
 
 import numpy as np
-import tensorflow as tf
-from tensorflow import keras
 
-from basic_nn import MODEL_PATH, build_model, load_data
-
-
-# ------------------------------
-# Configuration
-# ------------------------------
-DRAW_GRID_SIZE = 28
-DRAW_CANVAS_SIZE = 280
-
-WINDOW_SIZE = "1500x980"
-WINDOW_MIN_SIZE = (1300, 860)
-
-COLOR_BG = "#f3f7fb"
-COLOR_CARD = "#ffffff"
-COLOR_INK = "#0f172a"
-COLOR_SUB = "#475569"
-COLOR_EDGE = "#cbd5e1"
-
-COLOR_STATUS_INFO_BG = "#e0f2fe"
-COLOR_STATUS_INFO_FG = "#0c4a6e"
-COLOR_STATUS_WARN_BG = "#fff7ed"
-COLOR_STATUS_WARN_FG = "#9a3412"
-
-COLOR_NEUTRAL_BTN = "#e5e7eb"
-COLOR_NEUTRAL_BTN_HOVER = "#d1d5db"
-COLOR_NEUTRAL_BTN_PRESS = "#c7ccd4"
-
-DRAW_BRUSH = [
-    (-1, -1, 0.30),
-    (-1, 0, 0.55),
-    (-1, 1, 0.30),
-    (0, -1, 0.55),
-    (0, 0, 1.00),
-    (0, 1, 0.55),
-    (1, -1, 0.30),
-    (1, 0, 0.55),
-    (1, 1, 0.30),
-]
-
-THINK_STEP_MS = 320
-THINK_STAGE_LABELS = [
-    "Reading the input pixels",
-    "Activating hidden layer 1",
-    "Applying dropout path (inference mode)",
-    "Activating hidden layer 2",
-    "Computing output probabilities",
-]
-
-
-# ------------------------------
-# Model bootstrap
-# ------------------------------
-def load_or_train_model(model_path: Path) -> keras.Model:
-    """Load saved model or train a quick bootstrap model if missing."""
-    if model_path.exists():
-        return keras.models.load_model(model_path)
-
-    x_train, y_train, x_test, y_test = load_data()
-    model = build_model()
-    model.fit(
-        x_train,
-        y_train,
-        validation_split=0.1,
-        epochs=3,
-        batch_size=128,
-        verbose=2,
-    )
-
-    loss, accuracy = model.evaluate(x_test, y_test, verbose=0)
-    print(
-        "UI bootstrap training complete - "
-        f"test loss: {loss:.4f}, test accuracy: {accuracy:.4f}"
-    )
-
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    model.save(model_path)
-    print(f"Saved model to {model_path}")
-    return model
+from basic_nn import MODEL_PATH, load_data
+from ui_constants import (
+    COLOR_BG,
+    COLOR_CARD,
+    COLOR_EDGE,
+    COLOR_INK,
+    COLOR_NEUTRAL_BTN,
+    COLOR_NEUTRAL_BTN_HOVER,
+    COLOR_NEUTRAL_BTN_PRESS,
+    COLOR_STATUS_INFO_BG,
+    COLOR_STATUS_INFO_FG,
+    COLOR_STATUS_WARN_BG,
+    COLOR_STATUS_WARN_FG,
+    COLOR_SUB,
+    DRAW_BRUSH,
+    DRAW_CANVAS_SIZE,
+    DRAW_GRID_SIZE,
+    THINK_STAGE_LABELS,
+    THINK_STEP_MS,
+    WINDOW_MIN_SIZE,
+    WINDOW_SIZE,
+)
+from ui_model import (
+    build_probe_model,
+    ensure_model_callable,
+    extract_dense_weights,
+    load_or_train_model,
+    run_probe_prediction,
+)
+from ui_preprocessing import preprocess_drawn_digit
+from ui_render_utils import format_top_contribs, layer_y_positions, mix_with_white, pick_indices
 
 
 class NNTrainingToolUI:
-    """Main application class for model visualization and interaction."""
+    """Main application class for model visualization and interaction.
+
+    If you are new to Python/Tkinter, think of this class as:
+    - the "controller" (responds to user actions),
+    - the "view" builder (creates and updates widgets),
+    - and the "orchestrator" that calls model utilities.
+    """
 
     def __init__(self, root: tk.Tk) -> None:
+        # Tk root is the main desktop window.
         self.root = root
         self.root.title("MNIST Neural Network Decision Explorer")
         self.root.geometry(WINDOW_SIZE)
         self.root.minsize(*WINDOW_MIN_SIZE)
         self.root.configure(bg=COLOR_BG)
 
+        # Tkinter StringVar objects let labels auto-update when values change.
         self.status_var = tk.StringVar(value="Loading data and model...")
         self.prediction_var = tk.StringVar(value="Prediction: -")
         self.truth_var = tk.StringVar(value="Ground Truth: -")
 
+        # In-memory 28x28 drawing buffer (float values from 0.0 to 1.0).
         self.draw_buffer = np.zeros((DRAW_GRID_SIZE, DRAW_GRID_SIZE), dtype=np.float32)
 
+        # Animation state:
+        # _thinking_job stores the active "after(...)" callback id.
+        # _thinking_context stores values needed across animation frames.
         self._thinking_job: str | None = None
         self._thinking_context: dict[str, object] | None = None
 
+        # Build visual style and layout before loading data/model so the user
+        # sees a responsive window early.
         self._configure_styles()
         self._build_layout()
         self._bind_shortcuts()
 
+        # Load MNIST data + model. This is the core inference backend.
         self.x_train, self.y_train, self.x_test, self.y_test = load_data()
         self.model = load_or_train_model(MODEL_PATH)
-        self._ensure_model_callable()
+        ensure_model_callable(self.model)
 
-        self.probe_model = keras.Model(
-            inputs=self.model.inputs,
-            outputs=[
-                self.model.layers[0].output,
-                self.model.layers[1].output,
-                self.model.layers[2].output,
-                self.model.layers[3].output,
-            ],
-        )
+        # Probe model returns intermediate activations used for visualization.
+        self.probe_model = build_probe_model(self.model)
 
         self.max_index = len(self.x_test) - 1
         self.index_var.set(0)
         self.index_spin.configure(to=self.max_index)
 
+        # Cache dense weights once for contributor analysis later.
         self._cache_layer_weights()
 
         self._set_status(
@@ -156,6 +115,7 @@ class NNTrainingToolUI:
     # Style / setup
     # ------------------------------
     def _configure_styles(self) -> None:
+        """Define ttk style rules so widgets share one visual language."""
         style = ttk.Style(self.root)
         style.theme_use("clam")
 
@@ -222,6 +182,7 @@ class NNTrainingToolUI:
         )
 
     def _bind_shortcuts(self) -> None:
+        """Register keyboard shortcuts for fast interaction."""
         self.root.bind("<Return>", lambda _e: self.update_view_from_dataset())
         self.root.bind("<KP_Enter>", lambda _e: self.update_view_from_dataset())
         self.root.bind("r", lambda _e: self.pick_random_sample())
@@ -232,17 +193,19 @@ class NNTrainingToolUI:
         self.root.bind("C", lambda _e: self.clear_drawing())
         self.root.bind("<Escape>", lambda _e: self.clear_drawing())
 
-    def _ensure_model_callable(self) -> None:
-        if not self.model.built:
-            self.model.build((None, 784))
-        _ = self.model(np.zeros((1, 784), dtype=np.float32), training=False)
-
     def _cache_layer_weights(self) -> None:
-        self.w_dense1, self.b_dense1 = self.model.layers[0].get_weights()
-        self.w_dense2, self.b_dense2 = self.model.layers[2].get_weights()
-        self.w_out, self.b_out = self.model.layers[3].get_weights()
+        """Pull dense weights out of the model and store for reuse."""
+        (
+            self.w_dense1,
+            self.b_dense1,
+            self.w_dense2,
+            self.b_dense2,
+            self.w_out,
+            self.b_out,
+        ) = extract_dense_weights(self.model)
 
     def _set_status(self, message: str, level: str = "info") -> None:
+        """Update bottom status banner text + color based on severity."""
         self.status_var.set(message)
         if level == "warn":
             self.status_label.configure(bg=COLOR_STATUS_WARN_BG, fg=COLOR_STATUS_WARN_FG)
@@ -253,6 +216,7 @@ class NNTrainingToolUI:
     # Layout
     # ------------------------------
     def _build_layout(self) -> None:
+        """Create top-level layout containers and major UI sections."""
         outer = ttk.Frame(self.root, padding=14, style="App.TFrame")
         outer.pack(fill="both", expand=True)
 
@@ -262,6 +226,7 @@ class NNTrainingToolUI:
         self._build_status(outer)
 
     def _build_header(self, parent: ttk.Frame) -> None:
+        """Create the title/subtitle area at the top of the window."""
         header = ttk.Frame(parent, style="App.TFrame")
         header.pack(fill="x", pady=(0, 10))
 
@@ -280,6 +245,7 @@ class NNTrainingToolUI:
         ).pack(anchor="w", pady=(2, 0))
 
     def _build_controls(self, parent: ttk.Frame) -> None:
+        """Create controls for dataset/sample actions and drawing actions."""
         controls = ttk.LabelFrame(
             parent,
             text="Dataset Input Controls",
@@ -346,6 +312,7 @@ class NNTrainingToolUI:
         ).grid(row=1, column=0, columnspan=7, pady=(6, 0), sticky="w")
 
     def _build_main_area(self, parent: ttk.Frame) -> None:
+        """Split UI into left input panel and right explanation panel."""
         results = ttk.Frame(parent, style="App.TFrame")
         results.pack(fill="both", expand=True)
 
@@ -403,6 +370,7 @@ class NNTrainingToolUI:
         self.contrib_text.configure(state="disabled")
 
     def _build_status(self, parent: ttk.Frame) -> None:
+        """Bottom status strip used for info/warning feedback."""
         status_frame = ttk.Frame(parent, style="App.TFrame")
         status_frame.pack(fill="x", pady=(8, 0))
 
@@ -420,6 +388,7 @@ class NNTrainingToolUI:
         self.status_label.pack(fill="x", anchor="w")
 
     def _build_left_panel(self, container: ttk.LabelFrame) -> None:
+        """Create input visualization panels: sample, drawing, preview."""
         sample_frame = ttk.LabelFrame(
             container,
             text="Current Input (28x28)",
@@ -502,6 +471,8 @@ class NNTrainingToolUI:
     # Input interactions
     # ------------------------------
     def _on_draw(self, event: tk.Event) -> None:
+        """Handle mouse draw events and paint into the 28x28 buffer."""
+        # Convert from screen pixels to 28x28 logical coordinates.
         cell_size = DRAW_CANVAS_SIZE / DRAW_GRID_SIZE
         col = int(event.x / cell_size)
         row = int(event.y / cell_size)
@@ -509,9 +480,11 @@ class NNTrainingToolUI:
         self._draw_digit_canvas()
 
     def _paint_to_draw_buffer(self, row: int, col: int) -> None:
+        """Paint a soft brush stamp centered at (row, col)."""
         if row < 0 or row >= DRAW_GRID_SIZE or col < 0 or col >= DRAW_GRID_SIZE:
             return
 
+        # Apply the brush kernel around target point for smoother lines.
         for dr, dc, strength in DRAW_BRUSH:
             rr = row + dr
             cc = col + dc
@@ -519,15 +492,18 @@ class NNTrainingToolUI:
                 self.draw_buffer[rr, cc] = min(1.0, self.draw_buffer[rr, cc] + strength)
 
     def _draw_digit_canvas(self) -> None:
+        """Render current draw_buffer to the visible draw canvas."""
         self._draw_pixel_grid(self.draw_canvas, self.draw_buffer, margin=0, size=DRAW_CANVAS_SIZE)
 
     def clear_drawing(self) -> None:
+        """Clear drawing buffer and stop active thinking animation."""
         self._cancel_thinking_animation()
         self.draw_buffer.fill(0.0)
         self._draw_digit_canvas()
         self._set_status("Drawing cleared.", level="info")
 
     def pick_random_sample(self) -> None:
+        """Pick a random test index and run full visualization update."""
         self.index_var.set(random.randint(0, self.max_index))
         self.update_view_from_dataset()
 
@@ -535,6 +511,7 @@ class NNTrainingToolUI:
     # Entry points
     # ------------------------------
     def update_view_from_dataset(self) -> None:
+        """Run inference/explanation flow using selected MNIST test sample."""
         try:
             idx = int(self.index_var.get())
         except (ValueError, tk.TclError):
@@ -550,7 +527,8 @@ class NNTrainingToolUI:
         self._run_inference_and_render(x=x, y_true=y_true, input_label=f"Dataset sample {idx}")
 
     def update_view_from_drawn(self) -> None:
-        x = self._preprocess_drawn_digit(self.draw_buffer)
+        """Preprocess user drawing and run inference/explanation flow."""
+        x = preprocess_drawn_digit(self.draw_buffer)
         if float(np.max(x)) <= 0.0:
             self._set_status("Draw a digit first, then run inference.", level="warn")
             return
@@ -562,81 +540,13 @@ class NNTrainingToolUI:
         )
 
     # ------------------------------
-    # Preprocessing
-    # ------------------------------
-    def _shift_image(self, image: np.ndarray, shift_r: int, shift_c: int) -> np.ndarray:
-        shifted = np.zeros_like(image)
-        h, w = image.shape
-
-        src_r0 = max(0, -shift_r)
-        src_r1 = min(h, h - shift_r) if shift_r >= 0 else h
-        dst_r0 = max(0, shift_r)
-        dst_r1 = dst_r0 + (src_r1 - src_r0)
-
-        src_c0 = max(0, -shift_c)
-        src_c1 = min(w, w - shift_c) if shift_c >= 0 else w
-        dst_c0 = max(0, shift_c)
-        dst_c1 = dst_c0 + (src_c1 - src_c0)
-
-        if src_r1 > src_r0 and src_c1 > src_c0:
-            shifted[dst_r0:dst_r1, dst_c0:dst_c1] = image[src_r0:src_r1, src_c0:src_c1]
-        return shifted
-
-    def _preprocess_drawn_digit(self, draw_img: np.ndarray) -> np.ndarray:
-        """Normalize user drawing into a model-ready 784-length vector."""
-        img = draw_img.astype(np.float32).copy()
-        if float(np.max(img)) <= 0.0:
-            return img.reshape(-1)
-
-        mask = img > 0.10
-        rows = np.where(mask.any(axis=1))[0]
-        cols = np.where(mask.any(axis=0))[0]
-        if len(rows) == 0 or len(cols) == 0:
-            return np.zeros((28 * 28,), dtype=np.float32)
-
-        crop = img[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
-        crop /= max(float(np.max(crop)), 1e-8)
-
-        h, w = crop.shape
-        scale = 20.0 / max(h, w)
-        new_h = max(1, int(round(h * scale)))
-        new_w = max(1, int(round(w * scale)))
-        resized = tf.image.resize(
-            crop[..., np.newaxis],
-            size=(new_h, new_w),
-            method="bilinear",
-        ).numpy()[..., 0]
-
-        canvas = np.zeros((28, 28), dtype=np.float32)
-        top = (28 - new_h) // 2
-        left = (28 - new_w) // 2
-        canvas[top : top + new_h, left : left + new_w] = resized
-
-        mass = float(np.sum(canvas))
-        if mass > 1e-8:
-            rr, cc = np.indices(canvas.shape)
-            cy = float(np.sum(rr * canvas) / mass)
-            cx = float(np.sum(cc * canvas) / mass)
-            shift_r = int(round(13.5 - cy))
-            shift_c = int(round(13.5 - cx))
-            canvas = self._shift_image(canvas, shift_r, shift_c)
-
-        return np.clip(canvas, 0.0, 1.0).astype(np.float32).reshape(-1)
-
-    # ------------------------------
     # Inference + animation
     # ------------------------------
     def _run_inference_and_render(self, x: np.ndarray, y_true: int | None, input_label: str) -> None:
-        dense1, dropout_out, dense2, probs = self.probe_model.predict(
-            np.expand_dims(x, axis=0),
-            verbose=0,
-        )
+        """Run model forward pass, update labels, then start thinking animation."""
+        dense1, dropout_out, dense2, probs = run_probe_prediction(self.probe_model, x)
 
-        dense1 = dense1[0]
-        dropout_out = dropout_out[0]
-        dense2 = dense2[0]
-        probs = probs[0]
-
+        # Prediction is the class with highest probability.
         y_pred = int(np.argmax(probs))
         confidence = float(probs[y_pred])
 
@@ -645,6 +555,7 @@ class NNTrainingToolUI:
         )
         self.prediction_var.set(f"Prediction: {y_pred}  (confidence {confidence * 100:.2f}%)")
 
+        # Show the actual 28x28 input the model received.
         image_2d = x.reshape(28, 28)
         self._draw_input_image(image_2d)
         self._draw_model_input_preview(image_2d)
@@ -662,12 +573,14 @@ class NNTrainingToolUI:
         )
 
     def _cancel_thinking_animation(self) -> None:
+        """Stop any scheduled animation callback and clear context."""
         if self._thinking_job is not None:
             self.root.after_cancel(self._thinking_job)
             self._thinking_job = None
         self._thinking_context = None
 
     def _set_contributor_text(self, text: str) -> None:
+        """Replace contents of the read-only contributor text box."""
         self.contrib_text.configure(state="normal")
         self.contrib_text.delete("1.0", "end")
         self.contrib_text.insert("1.0", text)
@@ -685,6 +598,7 @@ class NNTrainingToolUI:
         confidence: float,
         input_label: str,
     ) -> None:
+        """Initialize staged animation context and start from stage 0."""
         self._cancel_thinking_animation()
 
         self._thinking_context = {
@@ -699,14 +613,17 @@ class NNTrainingToolUI:
             "input_label": input_label,
         }
 
+        # During animation we temporarily show a placeholder message.
         self._set_contributor_text("Thinking... contribution details appear after final output.")
         self._advance_thinking_stage(0)
 
     def _advance_thinking_stage(self, stage_idx: int) -> None:
+        """Advance visualization by one stage until final output is reached."""
         ctx = self._thinking_context
         if ctx is None:
             return
 
+        # Clamp stage to valid range to avoid out-of-bounds issues.
         final_stage = len(THINK_STAGE_LABELS) - 1
         stage = min(stage_idx, final_stage)
 
@@ -726,6 +643,7 @@ class NNTrainingToolUI:
             level="info",
         )
 
+        # Schedule next stage if not finished yet.
         if stage < final_stage:
             self._thinking_job = self.root.after(
                 THINK_STEP_MS,
@@ -733,7 +651,7 @@ class NNTrainingToolUI:
             )
             return
 
-        # Final stage reached.
+        # Final stage reached: show final status + detailed contributor text.
         y_pred = int(ctx["y_pred"])
         confidence = float(ctx["confidence"])
         input_label = str(ctx["input_label"])
@@ -763,6 +681,7 @@ class NNTrainingToolUI:
         margin: int,
         size: int,
     ) -> None:
+        """Draw a 28x28 grayscale image as a scaled pixel grid on a canvas."""
         canvas.delete("all")
         cell = size / 28
 
@@ -775,6 +694,7 @@ class NNTrainingToolUI:
             width=2,
         )
 
+        # Draw each logical pixel as a rectangle.
         for r in range(28):
             for c in range(28):
                 value = float(image_2d[r, c])
@@ -787,33 +707,12 @@ class NNTrainingToolUI:
                 canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline=color)
 
     def _draw_input_image(self, image_2d: np.ndarray) -> None:
+        """Render main input preview (larger panel)."""
         self._draw_pixel_grid(self.input_canvas, image_2d, margin=12, size=336)
 
     def _draw_model_input_preview(self, image_2d: np.ndarray) -> None:
+        """Render compact model-input preview panel."""
         self._draw_pixel_grid(self.model_input_canvas, image_2d, margin=8, size=180)
-
-    def _pick_indices(self, n: int, k: int) -> np.ndarray:
-        if k >= n:
-            return np.arange(n, dtype=np.int32)
-        if k <= 1:
-            return np.array([n // 2], dtype=np.int32)
-        return np.unique(np.linspace(0, n - 1, num=k, dtype=np.int32))
-
-    def _mix_with_white(self, hex_color: str, intensity: float) -> str:
-        intensity = float(np.clip(intensity, 0.0, 1.0))
-        hex_color = hex_color.lstrip("#")
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        rr = int((255 * (1.0 - intensity)) + (r * intensity))
-        gg = int((255 * (1.0 - intensity)) + (g * intensity))
-        bb = int((255 * (1.0 - intensity)) + (b * intensity))
-        return f"#{rr:02x}{gg:02x}{bb:02x}"
-
-    def _layer_y_positions(self, top: float, bottom: float, count: int) -> np.ndarray:
-        if count <= 1:
-            return np.array([(top + bottom) / 2.0], dtype=np.float32)
-        return np.linspace(top, bottom, num=count, dtype=np.float32)
 
     # ------------------------------
     # Decision stage visualizer
@@ -829,7 +728,12 @@ class NNTrainingToolUI:
         y_pred: int,
         thinking_stage: int = 4,
     ) -> None:
-        """Draw full network view, with staged black-path thinking animation."""
+        """Draw network visualization and animate only the strongest path.
+
+        Important behavior:
+        - Full network stays visible the whole time.
+        - Black "strongest path" line grows stage-by-stage to imply thinking.
+        """
         canvas = self.stages_canvas
         canvas.delete("all")
         canvas.update_idletasks()
@@ -856,12 +760,14 @@ class NNTrainingToolUI:
             fill="#334155",
         )
 
+        # Compute x positions for 5 conceptual layers.
         left = 50
         right_network = int(width * 0.73)
         network_top = 88
         network_bottom = height - 56
         x_positions = np.linspace(left, right_network, num=5)
 
+        # Each tuple describes: (label, total_neurons, shown_neurons, values, color).
         layer_defs = [
             ("Input", 784, 28, x_input, "#2563eb"),
             ("Dense 1", 128, 24, dense1, "#059669"),
@@ -870,17 +776,19 @@ class NNTrainingToolUI:
             ("Output", 10, 10, probs, "#dc2626"),
         ]
 
+        # thinking_segments determines how many black links are currently visible.
         thinking_stage = max(0, min(thinking_stage, len(layer_defs) - 1))
         thinking_segments = min(thinking_stage, len(layer_defs) - 1)
 
+        # Pre-sample neuron indices so large layers remain readable on screen.
         sampled_indices: list[np.ndarray] = []
         sampled_values: list[np.ndarray] = []
         y_positions: list[np.ndarray] = []
 
         for i, (_name, total_n, shown_n, values, _color) in enumerate(layer_defs):
-            idx = self._pick_indices(total_n, shown_n)
+            idx = pick_indices(total_n, shown_n)
             vals = values[idx]
-            ys = self._layer_y_positions(network_top, network_bottom, len(idx))
+            ys = layer_y_positions(network_top, network_bottom, len(idx))
             sampled_indices.append(idx)
             sampled_values.append(vals)
             y_positions.append(ys)
@@ -897,14 +805,14 @@ class NNTrainingToolUI:
                 width=1,
             )
 
-        # Representative inter-layer edges (always visible for full context).
+        # Draw a sparse "background mesh" of gray edges for context.
         for li in range(len(layer_defs) - 1):
             x1 = float(x_positions[li])
             x2 = float(x_positions[li + 1])
             ys1 = y_positions[li]
             ys2 = y_positions[li + 1]
-            edge_i = self._pick_indices(len(ys1), min(8, len(ys1)))
-            edge_j = self._pick_indices(len(ys2), min(8, len(ys2)))
+            edge_i = pick_indices(len(ys1), min(8, len(ys1)))
+            edge_j = pick_indices(len(ys2), min(8, len(ys2)))
             for i in edge_i:
                 for j in edge_j:
                     canvas.create_line(
@@ -916,7 +824,7 @@ class NNTrainingToolUI:
                         width=1,
                     )
 
-        # Strongest activation path, revealed gradually as the "thinking" signal.
+        # Draw strongest path (black) progressively to show "thinking".
         strongest_full = [
             int(np.argmax(x_input)),
             int(np.argmax(dense1)),
@@ -938,7 +846,7 @@ class NNTrainingToolUI:
                 width=2,
             )
 
-        # Neurons.
+        # Draw sampled neuron circles, colored by activation intensity.
         for i, (name, total_n, _shown_n, _values, base_color) in enumerate(layer_defs):
             x = float(x_positions[i])
             vals = sampled_values[i]
@@ -948,7 +856,7 @@ class NNTrainingToolUI:
 
             for vi, y in enumerate(ys):
                 intensity = float(vals[vi]) / vmax
-                fill = self._mix_with_white(base_color, 0.20 + (0.80 * intensity))
+                fill = mix_with_white(base_color, 0.20 + (0.80 * intensity))
                 outline = base_color
                 canvas.create_oval(
                     x - radius,
@@ -977,7 +885,7 @@ class NNTrainingToolUI:
                 fill="#475569",
             )
 
-        # Probability panel.
+        # Right panel: final class probabilities (softmax output).
         bar_x0 = right_network + 40
         bar_x1 = width - 28
         canvas.create_rectangle(
@@ -1046,13 +954,6 @@ class NNTrainingToolUI:
     # ------------------------------
     # Contributions
     # ------------------------------
-    def _format_top_contribs(self, values: np.ndarray, prefix: str, top_n: int = 5) -> str:
-        pos_idx = np.argsort(values)[-top_n:][::-1]
-        neg_idx = np.argsort(values)[:top_n]
-        pos_lines = [f"  + {prefix}{int(i):>3}: {float(values[i]): .5f}" for i in pos_idx]
-        neg_lines = [f"  - {prefix}{int(i):>3}: {float(values[i]): .5f}" for i in neg_idx]
-        return "\n".join(["Top positive contributors:", *pos_lines, "Top negative contributors:", *neg_lines])
-
     def _render_contributor_text(
         self,
         x: np.ndarray,
@@ -1062,14 +963,18 @@ class NNTrainingToolUI:
         probs: np.ndarray,
         y_pred: int,
     ) -> None:
+        """Build human-readable contributor report for the prediction."""
+        # Hidden2 -> output contribution for predicted class.
         out_contrib = dense2 * self.w_out[:, y_pred]
 
+        # Find strongest hidden neurons and trace what drove them.
         top_h2 = int(np.argmax(dense2))
         h1_to_h2_contrib = dropout_out * self.w_dense2[:, top_h2]
 
         top_h1 = int(np.argmax(dense1))
         input_to_h1_contrib = x * self.w_dense1[:, top_h1]
 
+        # Top-3 probability summary is easier to read than all 10 values.
         sorted_probs = np.argsort(probs)[::-1]
         top3 = ", ".join([f"{int(i)}={float(probs[i]) * 100:.2f}%" for i in sorted_probs[:3]])
 
@@ -1080,17 +985,17 @@ class NNTrainingToolUI:
             "",
             "A) Hidden2 -> Output contributors for predicted class",
             "  contribution_i = a2[i] * W_out[i, pred_class]",
-            self._format_top_contribs(out_contrib, prefix="h2_"),
+            format_top_contribs(out_contrib, prefix="h2_"),
             "",
             "B) Hidden1 -> strongest Hidden2 neuron contributors",
             f"  target strongest hidden2 neuron: h2_{top_h2}",
             "  contribution_j = a1_dropout[j] * W_dense2[j, h2_target]",
-            self._format_top_contribs(h1_to_h2_contrib, prefix="h1_"),
+            format_top_contribs(h1_to_h2_contrib, prefix="h1_"),
             "",
             "C) Input pixel -> strongest Hidden1 neuron contributors",
             f"  target strongest hidden1 neuron: h1_{top_h1}",
             "  contribution_p = x[p] * W_dense1[p, h1_target]",
-            self._format_top_contribs(input_to_h1_contrib, prefix="px_"),
+            format_top_contribs(input_to_h1_contrib, prefix="px_"),
         ]
 
         self._set_contributor_text("\n".join(blocks))
