@@ -15,9 +15,10 @@ prediction workflow.
 import random
 import sys
 import tkinter as tk
+from queue import Empty, Queue
+from threading import Event, Thread
 import time
 from pathlib import Path
-from tkinter import ttk
 
 import numpy as np
 
@@ -36,17 +37,10 @@ from mnist_explorer.model.runtime import (
 )
 from mnist_explorer.ui.constants import (
     COLOR_BG,
-    COLOR_CARD,
-    COLOR_EDGE,
-    COLOR_INK,
-    COLOR_NEUTRAL_BTN,
-    COLOR_NEUTRAL_BTN_HOVER,
-    COLOR_NEUTRAL_BTN_PRESS,
     COLOR_STATUS_INFO_BG,
     COLOR_STATUS_INFO_FG,
     COLOR_STATUS_WARN_BG,
     COLOR_STATUS_WARN_FG,
-    COLOR_SUB,
     DRAW_BRUSH,
     DRAW_CANVAS_SIZE,
     DRAW_GRID_SIZE,
@@ -57,6 +51,7 @@ from mnist_explorer.ui.constants import (
 )
 from mnist_explorer.ui.canvas import draw_pixel_grid, paint_brush_stamp
 from mnist_explorer.ui.decision_panel import build_contributor_text, render_decision_stages
+from mnist_explorer.ui.layout import bind_shortcuts, build_layout, configure_styles
 from mnist_explorer.ui.preprocessing import preprocess_drawn_digit
 
 
@@ -94,12 +89,17 @@ class NNTrainingToolUI:
         self._last_live_heavy_pred: int | None = None
         # Track latest painted cell to avoid redundant redraw work during drag.
         self._last_draw_cell: tuple[int, int] | None = None
+        # Background live-inference worker plumbing.
+        self._live_infer_queue: Queue[np.ndarray] | None = None
+        self._live_result_queue: Queue[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] | None = None
+        self._live_worker_stop: Event | None = None
+        self._live_worker: Thread | None = None
 
         # Build visual style and layout before loading data/model so the user
         # sees a responsive window early.
-        self._configure_styles()
-        self._build_layout()
-        self._bind_shortcuts()
+        configure_styles(self.root)
+        build_layout(self)
+        bind_shortcuts(self)
 
         # Load MNIST data + model. This is the core inference backend.
         self.x_train, self.y_train, self.x_test, self.y_test = load_data()
@@ -120,90 +120,10 @@ class NNTrainingToolUI:
             "Ready. Use test samples or draw your own digit and run decision flow.",
             level="info",
         )
+        self._start_live_inference_worker()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.update_view_from_dataset()
         self._draw_digit_canvas()
-
-    # ------------------------------
-    # Style / setup
-    # ------------------------------
-    def _configure_styles(self) -> None:
-        """Define ttk style rules so widgets share one visual language."""
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-
-        style.configure("App.TFrame", background=COLOR_BG)
-
-        style.configure(
-            "Title.TLabel",
-            background=COLOR_BG,
-            foreground=COLOR_INK,
-            font=("Avenir Next", 20, "bold"),
-        )
-        style.configure(
-            "Subtitle.TLabel",
-            background=COLOR_BG,
-            foreground=COLOR_SUB,
-            font=("Avenir Next", 11),
-        )
-        style.configure(
-            "Section.TLabel",
-            background=COLOR_CARD,
-            foreground=COLOR_INK,
-            font=("Avenir Next", 11, "bold"),
-        )
-        style.configure(
-            "Body.TLabel",
-            background=COLOR_CARD,
-            foreground=COLOR_SUB,
-            font=("Avenir Next", 10),
-        )
-
-        style.configure(
-            "Card.TLabelframe",
-            background=COLOR_CARD,
-            foreground=COLOR_INK,
-            borderwidth=1,
-            relief="solid",
-        )
-        style.configure(
-            "Card.TLabelframe.Label",
-            background=COLOR_CARD,
-            foreground=COLOR_INK,
-            font=("Avenir Next", 10, "bold"),
-        )
-
-        style.configure(
-            "Neutral.TButton",
-            background=COLOR_NEUTRAL_BTN,
-            foreground="#1f2937",
-            borderwidth=1,
-            font=("Avenir Next", 10, "bold"),
-            padding=(12, 8),
-        )
-        style.map(
-            "Neutral.TButton",
-            background=[("active", COLOR_NEUTRAL_BTN_HOVER), ("pressed", COLOR_NEUTRAL_BTN_PRESS)],
-            foreground=[("disabled", "#9ca3af"), ("!disabled", "#111827")],
-        )
-
-        style.configure(
-            "App.TSpinbox",
-            fieldbackground="#f8fafc",
-            foreground=COLOR_INK,
-            padding=4,
-        )
-
-    def _bind_shortcuts(self) -> None:
-        """Register keyboard shortcuts for fast interaction."""
-        self.root.bind("<Return>", lambda _e: self.update_view_from_dataset())
-        self.root.bind("<KP_Enter>", lambda _e: self.update_view_from_dataset())
-        self.root.bind("r", lambda _e: self.pick_random_sample())
-        self.root.bind("R", lambda _e: self.pick_random_sample())
-        self.root.bind("d", lambda _e: self.update_view_from_drawn())
-        self.root.bind("D", lambda _e: self.update_view_from_drawn())
-        self.root.bind("c", lambda _e: self.clear_drawing())
-        self.root.bind("C", lambda _e: self.clear_drawing())
-        self.root.bind("<Escape>", lambda _e: self.clear_drawing())
 
     def _cache_layer_weights(self) -> None:
         """Pull dense weights out of the model and store for reuse."""
@@ -223,231 +143,6 @@ class NNTrainingToolUI:
             self.status_label.configure(bg=COLOR_STATUS_WARN_BG, fg=COLOR_STATUS_WARN_FG)
         else:
             self.status_label.configure(bg=COLOR_STATUS_INFO_BG, fg=COLOR_STATUS_INFO_FG)
-
-    # ------------------------------
-    # Layout
-    # ------------------------------
-    def _build_layout(self) -> None:
-        """Create top-level layout containers and major UI sections."""
-        outer = ttk.Frame(self.root, padding=14, style="App.TFrame")
-        outer.pack(fill="both", expand=True)
-
-        self._build_header(outer)
-        self._build_controls(outer)
-        self._build_main_area(outer)
-        self._build_status(outer)
-
-    def _build_header(self, parent: ttk.Frame) -> None:
-        """Create the title/subtitle area at the top of the window."""
-        header = ttk.Frame(parent, style="App.TFrame")
-        header.pack(fill="x", pady=(0, 10))
-
-        ttk.Label(
-            header,
-            text="MNIST Neural Network Decision Explorer",
-            style="Title.TLabel",
-        ).pack(anchor="w")
-        ttk.Label(
-            header,
-            text=(
-                "Inspect stage-by-stage activations and contributor summaries for "
-                "dataset samples or your own drawn digits."
-            ),
-            style="Subtitle.TLabel",
-        ).pack(anchor="w", pady=(2, 0))
-
-    def _build_controls(self, parent: ttk.Frame) -> None:
-        """Create controls for dataset/sample actions and drawing actions."""
-        controls = ttk.LabelFrame(
-            parent,
-            text="Dataset Input Controls",
-            padding=12,
-            style="Card.TLabelframe",
-        )
-        controls.pack(fill="x", pady=(0, 10))
-        controls.grid_columnconfigure(6, weight=1)
-
-        self.index_var = tk.IntVar(value=0)
-
-        ttk.Label(controls, text="MNIST test sample index:", style="Section.TLabel").grid(
-            row=0,
-            column=0,
-            padx=(0, 6),
-            pady=4,
-            sticky="w",
-        )
-        self.index_spin = ttk.Spinbox(
-            controls,
-            from_=0,
-            to=9999,
-            textvariable=self.index_var,
-            width=10,
-            style="App.TSpinbox",
-        )
-        self.index_spin.grid(row=0, column=1, padx=(0, 8), pady=4, sticky="w")
-
-        ttk.Button(
-            controls,
-            text="Run Dataset Sample",
-            command=self.update_view_from_dataset,
-            style="Neutral.TButton",
-        ).grid(row=0, column=2, padx=(0, 8), pady=4, sticky="w")
-
-        ttk.Button(
-            controls,
-            text="Random Sample",
-            command=self.pick_random_sample,
-            style="Neutral.TButton",
-        ).grid(row=0, column=3, padx=(0, 8), pady=4, sticky="w")
-
-        ttk.Button(
-            controls,
-            text="Clear Drawn Digit",
-            command=self.clear_drawing,
-            style="Neutral.TButton",
-        ).grid(row=0, column=4, padx=(0, 8), pady=4, sticky="w")
-
-        ttk.Label(
-            controls,
-            text=(
-                "Shortcuts: Enter=run sample, R=random sample, "
-                "D=run drawn, C/Esc=clear drawing. Draw panel predicts in real time."
-            ),
-            style="Body.TLabel",
-        ).grid(row=1, column=0, columnspan=7, pady=(6, 0), sticky="w")
-
-    def _build_main_area(self, parent: ttk.Frame) -> None:
-        """Split UI into left input panel and right explanation panel."""
-        results = ttk.Frame(parent, style="App.TFrame")
-        results.pack(fill="both", expand=True)
-
-        left = ttk.LabelFrame(results, text="Input Sources", padding=10, style="Card.TLabelframe")
-        left.pack(side="left", fill="y", padx=(0, 10))
-        self._build_left_panel(left)
-
-        right = ttk.Frame(results, style="App.TFrame")
-        right.pack(side="left", fill="both", expand=True)
-
-        decision_frame = ttk.LabelFrame(
-            right,
-            text="Decision Stages",
-            padding=10,
-            style="Card.TLabelframe",
-        )
-        decision_frame.pack(fill="both", expand=True)
-
-        self.stages_canvas = tk.Canvas(
-            decision_frame,
-            width=1040,
-            height=560,
-            bg="#f4f8ff",
-            highlightthickness=1,
-            highlightbackground=COLOR_EDGE,
-        )
-        self.stages_canvas.pack(fill="both", expand=True)
-
-        contrib_frame = ttk.LabelFrame(
-            right,
-            text="Top Contributing Neurons (activation x weight)",
-            padding=8,
-            style="Card.TLabelframe",
-        )
-        contrib_frame.pack(fill="both", expand=False, pady=(8, 0))
-
-        self.contrib_text = tk.Text(
-            contrib_frame,
-            width=102,
-            height=11,
-            wrap="word",
-            bg="#fcfdff",
-            fg=COLOR_INK,
-            font=("Menlo", 11),
-            highlightthickness=1,
-            highlightbackground=COLOR_EDGE,
-            relief="flat",
-            padx=10,
-            pady=10,
-        )
-        contrib_scroll = ttk.Scrollbar(contrib_frame, orient="vertical", command=self.contrib_text.yview)
-        self.contrib_text.configure(yscrollcommand=contrib_scroll.set)
-        self.contrib_text.pack(side="left", fill="both", expand=True)
-        contrib_scroll.pack(side="right", fill="y")
-        self.contrib_text.configure(state="disabled")
-
-    def _build_status(self, parent: ttk.Frame) -> None:
-        """Bottom status strip used for info/warning feedback."""
-        status_frame = ttk.Frame(parent, style="App.TFrame")
-        status_frame.pack(fill="x", pady=(8, 0))
-
-        self.status_label = tk.Label(
-            status_frame,
-            textvariable=self.status_var,
-            bg=COLOR_STATUS_INFO_BG,
-            fg=COLOR_STATUS_INFO_FG,
-            font=("Avenir Next", 10, "bold"),
-            padx=10,
-            pady=8,
-            anchor="w",
-            relief="flat",
-        )
-        self.status_label.pack(fill="x", anchor="w")
-
-    def _build_left_panel(self, container: ttk.LabelFrame) -> None:
-        """Create input visualization panels for preprocessed input and drawing."""
-        sample_frame = ttk.LabelFrame(
-            container,
-            text="Current Input (Preprocessed 28x28)",
-            padding=8,
-            style="Card.TLabelframe",
-        )
-        sample_frame.pack(fill="x")
-
-        self.input_canvas = tk.Canvas(
-            sample_frame,
-            width=360,
-            height=360,
-            bg="#111827",
-            highlightthickness=1,
-            highlightbackground=COLOR_EDGE,
-        )
-        self.input_canvas.pack()
-
-        ttk.Label(sample_frame, textvariable=self.truth_var, style="Section.TLabel").pack(
-            anchor="w", pady=(10, 2)
-        )
-        ttk.Label(sample_frame, textvariable=self.prediction_var, style="Section.TLabel").pack(anchor="w")
-
-        draw_frame = ttk.LabelFrame(
-            container,
-            text="Draw Your Own Digit",
-            padding=8,
-            style="Card.TLabelframe",
-        )
-        draw_frame.pack(fill="x", pady=(10, 0))
-
-        self.draw_canvas = tk.Canvas(
-            draw_frame,
-            width=DRAW_CANVAS_SIZE,
-            height=DRAW_CANVAS_SIZE,
-            bg="#111827",
-            highlightthickness=1,
-            highlightbackground=COLOR_EDGE,
-            cursor="crosshair",
-            takefocus=1,
-        )
-        self.draw_canvas.pack()
-        self.draw_canvas.bind("<Button-1>", self._on_draw)
-        self.draw_canvas.bind("<B1-Motion>", self._on_draw)
-        self.draw_canvas.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_last_draw_cell", None))
-
-        ttk.Label(
-            draw_frame,
-            text=(
-                "Draw in white on black. The top input panel now shows the "
-                "preprocessed model input in real time."
-            ),
-            style="Body.TLabel",
-        ).pack(anchor="w", pady=(8, 0))
 
     # ------------------------------
     # Input interactions
@@ -500,38 +195,111 @@ class NNTrainingToolUI:
             self._draw_input_image(x.reshape(28, 28))
             return
 
+        self.truth_var.set("Ground Truth: N/A (drawn input)")
+        self._draw_input_image(x.reshape(28, 28))
+
+        # In production we run inference off the Tk thread.
+        # Tests that construct UI shells via __new__ keep working via fallback.
+        if self._submit_live_inference(x):
+            return
+
         dense1, dropout_out, dense2, probs = run_probe_prediction(self.probe_model, x)
+        self._apply_live_inference_result(x, dense1, dropout_out, dense2, probs)
+
+    def _apply_live_inference_result(
+        self,
+        x: np.ndarray,
+        dense1: np.ndarray,
+        dropout_out: np.ndarray,
+        dense2: np.ndarray,
+        probs: np.ndarray,
+    ) -> None:
+        """Apply one live inference result on the Tk thread."""
         y_pred = int(np.argmax(probs))
         confidence = float(probs[y_pred])
+        self.prediction_var.set(f"Live prediction: {y_pred}  (confidence {confidence * 100:.2f}%)")
 
-        self.truth_var.set("Ground Truth: N/A (drawn input)")
-        self.prediction_var.set(
-            f"Live prediction: {y_pred}  (confidence {confidence * 100:.2f}%)"
-        )
-
-        image_2d = x.reshape(28, 28)
-        # Lightweight live refresh: always keep current preprocessed input current.
-        self._draw_input_image(image_2d)
-
-        # Heavy refresh (network graph + contributor text) is throttled to
-        # reduce draw lag. We still force refresh when predicted class changes.
-        now = self._last_live_predict_ts
+        now = time.monotonic()
         heavy_interval_s = LIVE_DRAW_HEAVY_REFRESH_INTERVAL_MS / 1000.0
         class_changed = self._last_live_heavy_pred != y_pred
         due_for_heavy = (now - self._last_live_heavy_render_ts) >= heavy_interval_s
         if class_changed or due_for_heavy:
             self._draw_decision_stages(
-                x,
-                dense1,
-                dropout_out,
-                dense2,
-                probs,
+                x_input=x,
+                dense1=dense1,
+                dropout_out=dropout_out,
+                dense2=dense2,
+                probs=probs,
                 y_true=None,
                 y_pred=y_pred,
             )
             self._render_contributor_text(x, dense1, dropout_out, dense2, probs, y_pred)
             self._last_live_heavy_render_ts = now
             self._last_live_heavy_pred = y_pred
+
+    def _submit_live_inference(self, x: np.ndarray) -> bool:
+        """Queue latest drawn input for background inference."""
+        queue = getattr(self, "_live_infer_queue", None)
+        if queue is None:
+            return False
+        queued = False
+        try:
+            while True:
+                queue.get_nowait()
+        except Empty:
+            pass
+        try:
+            queue.put_nowait(np.array(x, copy=True))
+            queued = True
+        except Exception:
+            queued = False
+        return queued
+
+    def _start_live_inference_worker(self) -> None:
+        """Start a worker thread for live-draw inference."""
+        self._live_infer_queue = Queue(maxsize=1)
+        self._live_result_queue = Queue(maxsize=1)
+        self._live_worker_stop = Event()
+        self._live_worker = Thread(target=self._live_inference_worker_loop, daemon=True)
+        self._live_worker.start()
+        self.root.after(16, self._poll_live_inference_results)
+
+    def _live_inference_worker_loop(self) -> None:
+        """Worker loop that performs live inference outside Tk thread."""
+        assert self._live_infer_queue is not None
+        assert self._live_result_queue is not None
+        while True:
+            if self._live_worker_stop is not None and self._live_worker_stop.is_set():
+                return
+            try:
+                x = self._live_infer_queue.get(timeout=0.1)
+            except Empty:
+                continue
+            dense1, dropout_out, dense2, probs = run_probe_prediction(self.probe_model, x)
+            # Keep only latest result; older ones are stale during drawing.
+            try:
+                while True:
+                    self._live_result_queue.get_nowait()
+            except Empty:
+                pass
+            self._live_result_queue.put((x, dense1, dropout_out, dense2, probs))
+
+    def _poll_live_inference_results(self) -> None:
+        """Drain queued live results and apply only the newest one."""
+        result_queue = getattr(self, "_live_result_queue", None)
+        if result_queue is None:
+            return
+        latest: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
+        try:
+            while True:
+                latest = result_queue.get_nowait()
+        except Empty:
+            pass
+        if latest is not None:
+            self._apply_live_inference_result(*latest)
+        stop_event = getattr(self, "_live_worker_stop", None)
+        if stop_event is None or not stop_event.is_set():
+            self.root.after(16, self._poll_live_inference_results)
 
     def _paint_to_draw_buffer(self, row: int, col: int) -> None:
         """Paint a soft brush stamp centered at (row, col)."""
@@ -554,6 +322,12 @@ class NNTrainingToolUI:
         self.truth_var.set("Ground Truth: -")
         self.prediction_var.set("Prediction: -")
         self._set_status("Drawing cleared.", level="info")
+
+    def _on_close(self) -> None:
+        """Shutdown background worker and close the Tk window cleanly."""
+        if self._live_worker_stop is not None:
+            self._live_worker_stop.set()
+        self.root.destroy()
 
     def pick_random_sample(self) -> None:
         """Pick a random test index and run full visualization update."""
