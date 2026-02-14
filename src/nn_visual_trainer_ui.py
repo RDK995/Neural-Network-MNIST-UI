@@ -391,10 +391,10 @@ class NNTrainingToolUI:
         self.status_label.pack(fill="x", anchor="w")
 
     def _build_left_panel(self, container: ttk.LabelFrame) -> None:
-        """Create input visualization panels: sample, drawing, preview."""
+        """Create input visualization panels for preprocessed input and drawing."""
         sample_frame = ttk.LabelFrame(
             container,
-            text="Current Input (28x28)",
+            text="Current Input (Preprocessed 28x28)",
             padding=8,
             style="Card.TLabelframe",
         )
@@ -440,33 +440,9 @@ class NNTrainingToolUI:
         ttk.Label(
             draw_frame,
             text=(
-                "Draw in white on black. Use top controls (or D key) to run "
-                "inference. Clear with top control, C key, or Esc."
+                "Draw in white on black. The top input panel now shows the "
+                "preprocessed model input in real time."
             ),
-            style="Body.TLabel",
-        ).pack(anchor="w", pady=(8, 0))
-
-        preview_frame = ttk.LabelFrame(
-            container,
-            text="Model Input Preview (28x28 after preprocessing)",
-            padding=8,
-            style="Card.TLabelframe",
-        )
-        preview_frame.pack(fill="x", pady=(10, 0))
-
-        self.model_input_canvas = tk.Canvas(
-            preview_frame,
-            width=196,
-            height=196,
-            bg="#111827",
-            highlightthickness=1,
-            highlightbackground=COLOR_EDGE,
-        )
-        self.model_input_canvas.pack()
-
-        ttk.Label(
-            preview_frame,
-            text="This is exactly what the model receives for prediction.",
             style="Body.TLabel",
         ).pack(anchor="w", pady=(8, 0))
 
@@ -519,7 +495,7 @@ class NNTrainingToolUI:
         if float(np.max(x)) <= 0.0:
             self.truth_var.set("Ground Truth: N/A (drawn input)")
             self.prediction_var.set("Prediction: -")
-            self._draw_model_input_preview(x.reshape(28, 28))
+            self._draw_input_image(x.reshape(28, 28))
             return
 
         dense1, dropout_out, dense2, probs = run_probe_prediction(self.probe_model, x)
@@ -532,8 +508,8 @@ class NNTrainingToolUI:
         )
 
         image_2d = x.reshape(28, 28)
-        # Lightweight live refresh: always keep model input preview current.
-        self._draw_model_input_preview(image_2d)
+        # Lightweight live refresh: always keep current preprocessed input current.
+        self._draw_input_image(image_2d)
 
         # Heavy refresh (network graph + contributor text) is throttled to
         # reduce draw lag. We still force refresh when predicted class changes.
@@ -646,7 +622,6 @@ class NNTrainingToolUI:
         # Show the actual 28x28 input the model received.
         image_2d = x.reshape(28, 28)
         self._draw_input_image(image_2d)
-        self._draw_model_input_preview(image_2d)
 
         self._start_thinking_animation(
             x=x,
@@ -797,10 +772,6 @@ class NNTrainingToolUI:
     def _draw_input_image(self, image_2d: np.ndarray) -> None:
         """Render main input preview (larger panel)."""
         self._draw_pixel_grid(self.input_canvas, image_2d, margin=12, size=336)
-
-    def _draw_model_input_preview(self, image_2d: np.ndarray) -> None:
-        """Render compact model-input preview panel."""
-        self._draw_pixel_grid(self.model_input_canvas, image_2d, margin=8, size=180)
 
     # ------------------------------
     # Decision stage visualizer
