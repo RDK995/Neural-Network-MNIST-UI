@@ -8,7 +8,10 @@ Basic neural network example using TensorFlow + Keras on the MNIST dataset.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pre-commit install
 ```
+
+`pre-commit install` adds the local git hook so tests/checks run before each commit.
 
 ## Run
 
@@ -78,3 +81,19 @@ Notes:
 ### Inference Flow
 
 ![Inference Flow](assets/inference_flow.svg)
+
+## Tests
+
+Run unit tests:
+
+```bash
+pytest -q
+```
+
+Run all pre-commit checks manually:
+
+```bash
+pre-commit run --all-files
+```
+
+PRs to `main` are also checked automatically by GitHub Actions using this same pre-commit configuration.
