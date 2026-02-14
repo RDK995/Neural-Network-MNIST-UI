@@ -15,8 +15,6 @@ prediction workflow.
 import random
 import sys
 import tkinter as tk
-from queue import Empty, Queue
-from threading import Event, Thread
 import time
 from pathlib import Path
 
@@ -53,6 +51,7 @@ from mnist_explorer.ui.canvas import draw_pixel_grid, paint_brush_stamp
 from mnist_explorer.ui.decision_panel import build_contributor_text, render_decision_stages
 from mnist_explorer.ui.layout import bind_shortcuts, build_layout, configure_styles
 from mnist_explorer.ui.preprocessing import preprocess_drawn_digit
+from mnist_explorer.services.live_inference import LiveInferenceResult, LiveInferenceWorker
 
 
 class NNTrainingToolUI:
@@ -89,11 +88,8 @@ class NNTrainingToolUI:
         self._last_live_heavy_pred: int | None = None
         # Track latest painted cell to avoid redundant redraw work during drag.
         self._last_draw_cell: tuple[int, int] | None = None
-        # Background live-inference worker plumbing.
-        self._live_infer_queue: Queue[np.ndarray] | None = None
-        self._live_result_queue: Queue[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] | None = None
-        self._live_worker_stop: Event | None = None
-        self._live_worker: Thread | None = None
+        # Background worker (single responsibility: non-blocking live inference).
+        self._live_worker: LiveInferenceWorker | None = None
 
         # Build visual style and layout before loading data/model so the user
         # sees a responsive window early.
@@ -238,67 +234,43 @@ class NNTrainingToolUI:
             self._last_live_heavy_pred = y_pred
 
     def _submit_live_inference(self, x: np.ndarray) -> bool:
-        """Queue latest drawn input for background inference."""
-        queue = getattr(self, "_live_infer_queue", None)
-        if queue is None:
+        """Queue latest drawn input for background inference.
+
+        We keep this wrapper method on the UI class so unit tests can still
+        construct lightweight shells without fully initializing the worker.
+        """
+        worker = getattr(self, "_live_worker", None)
+        if worker is None:
             return False
-        queued = False
-        try:
-            while True:
-                queue.get_nowait()
-        except Empty:
-            pass
-        try:
-            queue.put_nowait(np.array(x, copy=True))
-            queued = True
-        except Exception:
-            queued = False
-        return queued
+        return worker.submit(x)
 
     def _start_live_inference_worker(self) -> None:
-        """Start a worker thread for live-draw inference."""
-        self._live_infer_queue = Queue(maxsize=1)
-        self._live_result_queue = Queue(maxsize=1)
-        self._live_worker_stop = Event()
-        self._live_worker = Thread(target=self._live_inference_worker_loop, daemon=True)
+        """Start asynchronous live inference support."""
+        self._live_worker = LiveInferenceWorker(
+            predict_fn=lambda x: run_probe_prediction(self.probe_model, x)
+        )
         self._live_worker.start()
         self.root.after(16, self._poll_live_inference_results)
 
-    def _live_inference_worker_loop(self) -> None:
-        """Worker loop that performs live inference outside Tk thread."""
-        assert self._live_infer_queue is not None
-        assert self._live_result_queue is not None
-        while True:
-            if self._live_worker_stop is not None and self._live_worker_stop.is_set():
-                return
-            try:
-                x = self._live_infer_queue.get(timeout=0.1)
-            except Empty:
-                continue
-            dense1, dropout_out, dense2, probs = run_probe_prediction(self.probe_model, x)
-            # Keep only latest result; older ones are stale during drawing.
-            try:
-                while True:
-                    self._live_result_queue.get_nowait()
-            except Empty:
-                pass
-            self._live_result_queue.put((x, dense1, dropout_out, dense2, probs))
-
     def _poll_live_inference_results(self) -> None:
-        """Drain queued live results and apply only the newest one."""
-        result_queue = getattr(self, "_live_result_queue", None)
-        if result_queue is None:
+        """Drain queued live results and apply only the newest one.
+
+        Polling is scheduled via Tk's timer so all UI mutations stay on the
+        main thread (Tk is not thread-safe).
+        """
+        worker = getattr(self, "_live_worker", None)
+        if worker is None:
             return
-        latest: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
-        try:
-            while True:
-                latest = result_queue.get_nowait()
-        except Empty:
-            pass
+        latest: LiveInferenceResult | None = worker.poll_latest()
         if latest is not None:
-            self._apply_live_inference_result(*latest)
-        stop_event = getattr(self, "_live_worker_stop", None)
-        if stop_event is None or not stop_event.is_set():
+            self._apply_live_inference_result(
+                latest.x,
+                latest.dense1,
+                latest.dropout_out,
+                latest.dense2,
+                latest.probs,
+            )
+        if not worker.is_stopped():
             self.root.after(16, self._poll_live_inference_results)
 
     def _paint_to_draw_buffer(self, row: int, col: int) -> None:
@@ -325,8 +297,8 @@ class NNTrainingToolUI:
 
     def _on_close(self) -> None:
         """Shutdown background worker and close the Tk window cleanly."""
-        if self._live_worker_stop is not None:
-            self._live_worker_stop.set()
+        if self._live_worker is not None:
+            self._live_worker.stop()
         self.root.destroy()
 
     def pick_random_sample(self) -> None:
