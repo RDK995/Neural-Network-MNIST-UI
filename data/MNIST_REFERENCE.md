@@ -10,13 +10,13 @@ The returned original split is:
 - Image size: `28 x 28` grayscale pixels (`0-255`)
 
 ## Why this file exists
-The full raw dataset is not committed to git in this repository. Instead, this file records the exact source and shape used by training code in `src/basic_nn.py`.
+The full raw dataset is not committed to git in this repository. Instead, this file records the exact source and shape used by training code in `src/mnist_explorer/model/basic_nn.py`.
 
 ## Generate a local CSV reference extract
 Run:
 
 ```bash
-python src/export_mnist_reference.py
+python src/mnist_explorer/tools/export_mnist_reference.py
 ```
 
 This creates:

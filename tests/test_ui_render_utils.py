@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ui_render_utils import format_top_contribs, layer_y_positions, mix_with_white, pick_indices
+from mnist_explorer.ui.render import format_top_contribs, layer_y_positions, mix_with_white, pick_indices
 
 
 def test_pick_indices_returns_full_range_when_k_exceeds_n() -> None:

@@ -16,4 +16,4 @@ echo "Installing/updating dependencies..."
 pip install -r "${ROOT_DIR}/requirements.txt"
 
 echo "Starting interactive training UI..."
-python "${ROOT_DIR}/src/nn_visual_trainer_ui.py"
+python "${ROOT_DIR}/src/mnist_explorer/app.py"

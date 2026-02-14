@@ -48,19 +48,9 @@ DRAW_BRUSH = [
     (1, 1, 0.30),
 ]
 
-# Time between "thinking" animation stages in milliseconds.
-THINK_STEP_MS = 320
 # Update interval for running live predictions while drawing.
 # Lower is more responsive, higher uses less CPU.
 LIVE_DRAW_PREDICT_INTERVAL_MS = 60
 # Heavy live-refresh interval for expensive visual panels
 # (network graph + contributor text). Keeping this higher prevents drawing lag.
 LIVE_DRAW_HEAVY_REFRESH_INTERVAL_MS = 220
-# Human-readable labels shown while animation advances layer-by-layer.
-THINK_STAGE_LABELS = [
-    "Reading the input pixels",
-    "Activating hidden layer 1",
-    "Applying dropout path (inference mode)",
-    "Activating hidden layer 2",
-    "Computing output probabilities",
-]

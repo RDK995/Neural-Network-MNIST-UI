@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ui_preprocessing import preprocess_drawn_digit, shift_image
+from mnist_explorer.ui.preprocessing import preprocess_drawn_digit, shift_image
 
 
 def _center_of_mass(image_2d: np.ndarray) -> tuple[float, float]:
