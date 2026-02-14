@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 from tensorflow import keras
 
-from basic_nn import build_model, load_data
+from mnist_explorer.model.basic_nn import build_model, load_data
 
 
 def load_or_train_model(model_path: Path) -> keras.Model:
@@ -108,8 +108,10 @@ def run_probe_prediction(
     The probe model returns batches (shape starts with batch dimension).
     UI code works with single examples, so we return index 0 from each output.
     """
-    dense1, dropout_out, dense2, probs = probe_model.predict(
+    # Calling the model directly avoids some overhead from Model.predict
+    # during frequent live-draw updates.
+    dense1, dropout_out, dense2, probs = probe_model(
         np.expand_dims(x, axis=0),
-        verbose=0,
+        training=False,
     )
-    return dense1[0], dropout_out[0], dense2[0], probs[0]
+    return dense1.numpy()[0], dropout_out.numpy()[0], dense2.numpy()[0], probs.numpy()[0]

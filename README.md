@@ -16,7 +16,7 @@ pre-commit install
 ## Run
 
 ```bash
-python src/basic_nn.py
+python src/mnist_explorer/model/basic_nn.py
 ```
 
 Or use the training script:
@@ -37,7 +37,7 @@ The run command also saves the trained model to:
 ## Interactive Training UI
 
 ```bash
-python src/nn_visual_trainer_ui.py
+python src/mnist_explorer/app.py
 ```
 
 Or use the UI launcher script:

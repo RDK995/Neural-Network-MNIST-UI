@@ -16,4 +16,4 @@ echo "Installing/updating dependencies..."
 pip install -r "${ROOT_DIR}/requirements.txt"
 
 echo "Starting model training..."
-python "${ROOT_DIR}/src/basic_nn.py"
+python "${ROOT_DIR}/src/mnist_explorer/model/basic_nn.py"

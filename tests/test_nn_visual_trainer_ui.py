@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-import nn_visual_trainer_ui as ui_mod
+import mnist_explorer.app as ui_mod
 
 
 class _DummyVar:
@@ -46,7 +46,6 @@ def _make_ui_shell() -> ui_mod.NNTrainingToolUI:
     ui._last_live_predict_ts = 0.0
     ui._last_live_heavy_render_ts = 0.0
     ui._last_live_heavy_pred = None
-    ui._cancel_thinking_animation = lambda: None
     return ui
 
 
