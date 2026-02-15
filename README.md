@@ -104,45 +104,9 @@ The source code is organized by responsibility:
 
 ![Inference Flow](assets/inference_flow.svg)
 
-### Per-sample Decision Trace
-
-![Per-sample Decision Trace](assets/per_sample_decision_trace.svg)
-
-### Contribution Decomposition
-
-![Contribution Decomposition](assets/contribution_decomposition.svg)
-
-### Preprocessing Before/After Grid
-
-![Preprocessing Before After Grid](assets/preprocessing_before_after_grid.svg)
-
 ### Confidence Over Stroke Timeline
 
 ![Confidence Over Stroke Timeline](assets/confidence_over_stroke_timeline.svg)
-
-### Class Probability Shift Heatmap
-
-![Class Probability Shift Heatmap](assets/class_probability_shift_heatmap.svg)
-
-### Layer Activation Distribution
-
-![Layer Activation Distribution](assets/layer_activation_distribution.svg)
-
-### Neuron Saturation View
-
-![Neuron Saturation View](assets/neuron_saturation_view.svg)
-
-### Error Case Explainer
-
-![Error Case Explainer](assets/error_case_explainer.svg)
-
-### Model Uncertainty Panel
-
-![Model Uncertainty Panel](assets/model_uncertainty_panel.svg)
-
-### Weight Topology Snapshot
-
-![Weight Topology Snapshot](assets/weight_topology_snapshot.svg)
 
 ## Tests
 
