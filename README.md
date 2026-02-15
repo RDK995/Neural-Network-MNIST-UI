@@ -1,4 +1,4 @@
-# NN
+# Neural-Network-MNIST-UI
 
 Basic neural network example using TensorFlow + Keras on the MNIST dataset.
 
